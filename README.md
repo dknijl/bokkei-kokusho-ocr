@@ -72,6 +72,24 @@ npm run build
 
 `npm test` は Svelte の型・アクセシビリティ検査後に本番ビルドを実行します。本番出力は `dist/client`、Sites 用 Worker は `dist/server/index.js` です。
 
+## 配信パス
+
+本番配信時のアプリのベースパスは `vite.config.ts` の `base` で指定します。現在は `/ocr/` です。
+
+```ts
+export default defineConfig({
+  base: "/ocr/",
+});
+```
+
+例： `/biblio/ocr/` 配下へ配置する場合は、次のように変更してからビルドします。
+
+```ts
+base: "/biblio/ocr/",
+```
+
+この設定はアセットのURLと、書誌IDを含む共有URL（`/biblio/ocr/{bid}`）の生成に使用されます。Nginx側でも同じパスを `dist/client` に割り当て、`/biblio/ocr/{bid}` を `/biblio/ocr/index.html` にフォールバックさせてください。
+
 ## 書誌IDによるURL指定
 
 サイトURLの直後に国書データベースの書誌IDを付けると、その資料のManifestを起動時に読み込みます。

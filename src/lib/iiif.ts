@@ -89,14 +89,29 @@ export const manifestPresets: ManifestPreset[] = [
 
 const kokushoManifestPattern = /^https:\/\/kokusho\.nijl\.ac\.jp\/biblio\/(\d+)\/manifest\/?$/;
 
+function appBasePath(): string {
+  const baseUrl = import.meta.env.BASE_URL;
+  return baseUrl === "./" ? "" : baseUrl.replace(/\/+$/, "");
+}
+
+export function appRootPath(): string {
+  const basePath = appBasePath();
+  return basePath ? `${basePath}/` : "/";
+}
+
 export function manifestUrlFromAppPath(pathname: string): string | null {
-  const match = pathname.match(/^\/(\d+)\/?$/);
+  const basePath = appBasePath();
+  if (basePath && pathname !== basePath && !pathname.startsWith(`${basePath}/`)) return null;
+
+  const relativePath = basePath ? pathname.slice(basePath.length) || "/" : pathname;
+  const match = relativePath.match(/^\/(\d+)\/?$/);
   return match ? `https://kokusho.nijl.ac.jp/biblio/${match[1]}/manifest` : null;
 }
 
 export function appPathFromManifestUrl(manifestUrl: string): string {
   const match = manifestUrl.match(kokushoManifestPattern);
-  return match ? `/${match[1]}` : "/";
+  const basePath = appBasePath();
+  return match ? `${basePath}/${match[1]}` : appRootPath();
 }
 
 const initialService = "https://kokusho.nijl.ac.jp/api/iiif/200021552/v4/NIIP";
