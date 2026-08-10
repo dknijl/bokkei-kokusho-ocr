@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { defineConfig, type Plugin } from "vite";
-import { sites } from "./build/sites-vite-plugin";
+import { sites } from "./build/sites-vite-plugin.ts";
 
 const workerSource = `
 export default {
@@ -54,15 +54,10 @@ function sitesWorker(): Plugin {
 }
 
 export default defineConfig({
+  base: "/ocr/",
   plugins: [svelte(), sitesWorker(), sites()],
   build: {
     outDir: "dist/client",
     emptyOutDir: true,
   },
-  // Specifies the directory to serve as the root of your application
-  // nginxのDocumentRootのパスに合わせる
-  // NGINX_ROOT/mysvapp なら
-  // base: '/mysvapp/',
-  // NGINX_ROOT/year/biblio/ なら
-  // base: '/year/biblio/',
 });

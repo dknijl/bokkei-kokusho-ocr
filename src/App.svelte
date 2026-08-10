@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import {
     appPathFromManifestUrl,
+    appRootPath,
     initialManifest,
     manifestPresets,
     manifestUrlFromAppPath,
@@ -179,7 +180,8 @@
 
   function loadManifestFromLocation(loadRoot = false) {
     const { pathname } = window.location;
-    if (pathname === "/" || pathname === "") {
+    const rootPath = appRootPath();
+    if (pathname === "/" || pathname === "" || pathname === rootPath || pathname === rootPath.replace(/\/$/, "")) {
       if (loadRoot) void loadManifest(initialManifest.url, false, true);
       return;
     }
