@@ -1,0 +1,397 @@
+export type Locale = "ja" | "en";
+
+export type ManifestStatus = "ocrNotRun" | "iiifLoaded" | "ocrComplete";
+
+export type MessageParams = Record<string, string | number>;
+
+export type CountUnit = "image" | "group" | "canvas" | "line";
+
+const ja = {
+  documentTitle: "墨景 — 古典籍OCRワークベンチ",
+  documentDescription: "国書データベースの書誌IDやIIIF Manifestから古典籍画像を読み込み、崩し字OCRと校訂を行えるワークベンチです。",
+  ogTitle: "墨景 — 古典籍OCRワークベンチ",
+  ogDescription: "書誌IDまたはIIIF Manifestから古典籍画像を開き、認識領域とOCR翻刻を比較。",
+  homeAria: "墨景 ホーム",
+  externalMaterial: "外部資料",
+  bibliographicId: "書誌ID {id}",
+  material: "資料",
+  chooseManifest: "Manifestを選ぶ",
+  ocrBackend: "NDL OCR · ON-DEVICE",
+  pageList: "ページ一覧",
+  pageNumber: "{number}ページ目 {label}",
+  viewer: "古典籍画像ビューワー",
+  displayMethod: "表示方法",
+  originalImage: "原画像",
+  inkEnhanced: "墨線強調",
+  ocrRegions: "OCR領域 {count}",
+  noOcrCoordinates: "OCR座標なし",
+  selectCharacter: "一文字を選択",
+  zoomOut: "縮小",
+  zoomLevel: "拡大率",
+  zoomIn: "拡大",
+  imageAlt: "{title} {label}の画像",
+  detectedRegions: "OCR検出領域",
+  detectedRegion: "OCR検出領域 {number}",
+  metomSelection: "Metom一文字認識用の矩形選択",
+  canvas: "IIIF CANVAS {number}",
+  dimensions: "{width} × {height} px",
+  noDimensions: "原寸情報なし",
+  openingLeft: "左開き",
+  openingRight: "右開き",
+  previous: "← 前",
+  next: "次 →",
+  recognitionResult: "RECOGNITION RESULT",
+  ocrHeading: "AI-OCR・校訂",
+  searchVariants: "異体字を検索",
+  searchRecognition: "認識結果を検索",
+  autoOcr: "ページ自動OCR",
+  ndlOnDevice: "NDL古典籍OCR-Lite · 端末内処理",
+  autoDetectLines: "崩し字の行を自動検出してOCR",
+  modelNotice: "初回のみモデル約82MB。画像はOCRサービスへ送信しません。",
+  cancel: "中断",
+  rerunPage: "このページを再OCR",
+  runPage: "このページを自動OCR",
+  ndlUsage: "NDL古典籍OCR-Liteの利用について",
+  softwareUsed: "利用ソフトウェア",
+  ndlNoticeStart: "本サービスは、国立国会図書館がCC BY 4.0で公開する",
+  ndlApplication: "NDL古典籍OCR-Liteアプリケーション",
+  ndlNoticeMiddle: "の学習済みモデルおよび処理方式を利用しています。ブラウザ向け実装は本サービス独自であり、国立国会図書館が提供・運営する公式サービスではありません。",
+  terms: "利用条件 ↗",
+  variantSoftware: "異体字データ: 国書DB異体字SQL",
+  transcription: "翻刻",
+  variants: "異体字",
+  singleCharacterOcr: "一文字OCR",
+  transcriptionResult: "OCR翻刻結果",
+  readingOrder: "縦書き · 右から左",
+  canvasCoordinates: "Canvas座標同期",
+  noCoordinateData: "座標データなし",
+  unreadable: "（判読不能）",
+  ocrNotRun: "OCR未実行",
+  runOcrInstruction: "上の「このページを自動OCR」を実行してください。",
+  ocrConfidenceNote: "{engine} / {provider}。表示値は文字行の検出信頼度で、翻刻文字ごとの確率ではありません。",
+  ocrDeviceDescription: "NDL古典籍OCR-Liteを端末内で実行し、文字行の検出・翻刻・座標表示を行います。",
+  variantPanel: "国書データベース異体字リスト",
+  searchScope: "「{query}」を検索",
+  allList: "全一覧",
+  selectedOcrLine: "選択中のOCR行から照合",
+  selectedLineOnly: "選択行のみ",
+  variantGroups: "{count} / {groups}組",
+  variantSource: "国文研 国書DB異体字SQL · {count}対応",
+  github: "GitHub ↗",
+  mit: "MIT",
+  showMore: "さらに表示（残り {count}組）",
+  noVariants: "対応する異体字なし",
+  noVariantsDetail: "国書データベースの異体字SQLに一致する文字がありません。",
+  metomService: "Metom 一文字認識",
+  publicApi: "PUBLIC API",
+  metomInstructions: "画像上の一文字をドラッグで囲みます。選択範囲を IIIF Image API の crop URL に変換し、Metom の上位10候補を取得します。",
+  metomAttribution: "1文字OCRにはCODHのMetomを利用しています。",
+  metomLink: "Metomを開く ↗",
+  metomCropAlt: "Metomに送る一文字の切り取り",
+  selectCharacterFromImage: "画像から一文字を選択",
+  metomRecognizing: "Metomで認識中…",
+  recognizeCharacter: "この一文字を認識",
+  metomApiNote: "実行時、公開 IIIF crop URL が CODH の Metom API に送信されます。Metom は一文字分類器で、全頁翻刻ではありません。",
+  fullPageOcr: "全頁・領域OCR",
+  loginReservation: "ログイン・予約実行が必要",
+  openCurrentManifest: "現在のManifestで開く ↗",
+  recognitionConditions: "認識条件",
+  lines: "{count} lines",
+  ocrModel: "OCRモデル",
+  iiifInput: "IIIF入力",
+  ocrOutput: "OCR出力",
+  coordinateText: "実座標付き行テキスト",
+  imageProvider: "画像提供：{attribution}",
+  publicDomain: "Public Domain Mark 1.0",
+  manifestTerms: "利用条件はManifestを確認",
+  manifestLink: "Manifest ↗",
+  presentationApi: "IIIF PRESENTATION API",
+  chooseManifestHeading: "Manifestを選ぶ",
+  close: "閉じる",
+  chooseFromKokusho: "国書データベースから選ぶ",
+  specifyUrl: "URLを指定する",
+  manifestUrl: "IIIF Manifest URL",
+  manifestApiDescription: "Presentation API 2 / 3に対応。OCRにはCanvas IDとImage Service IDをそのまま渡します。",
+  loadingManifest: "Manifestを読み込み中…",
+  openManifest: "このManifestを開く",
+  currentMaterial: "現在の資料",
+  progressStarting: "OCRを開始しています",
+  progressImage: "IIIF画像を取得中",
+  progressModels: "NDLモデルを準備中（初回約82MB）",
+  progressDetect: "崩し字の文字行を検出中",
+  progressRecognize: "文字行を認識中 {completed} / {total}",
+  progressDone: "{count}行のOCRが完了",
+  statusOcrNotRun: "OCR未実行",
+  statusIiifLoaded: "IIIF画像読込済み",
+  statusOcrComplete: "座標付きOCR実行済み",
+  errorInvalidRoute: "URLは /{bid} 形式で指定してください。bidには国書データベースの数字の書誌IDを使用します。",
+  errorHttpsManifest: "HTTPSのManifest URLを指定してください。",
+  errorManifestHttp: "Manifestを取得できませんでした（HTTP {status}）。",
+  errorManifestTimeout: "読込がタイムアウトしました。URLまたは配信元を確認してください。",
+  errorManifestGeneric: "Manifestを読み込めませんでした。",
+  errorMetomUnsupported: "このCanvasにはImage Service IDまたは原寸情報がなく、Metom用cropを作れません。",
+  errorMetomSelect: "画像上で一文字を矩形選択してください。",
+  errorMetomEmpty: "Metom APIが候補を返しませんでした。",
+  errorMetomTimeout: "Metom APIが20秒以内に応答しませんでした。",
+  errorMetomGeneric: "Metom APIへの接続に失敗しました。",
+  errorManifestImages: "画像Canvasを取得できませんでした。IIIF Presentation API v2/v3のManifestか確認してください。",
+  errorCropService: "このCanvasにはIIIF Image Service IDがありません。",
+  errorCropDimensions: "ManifestにCanvasの原寸がないため、切り取り座標を計算できません。",
+  errorMetomNonJson: "Metom APIがJSON以外を返しました（HTTP {status}）。",
+  errorMetomFailed: "Metom APIに失敗しました（HTTP {status}{detail}）。",
+  errorMetomResponse: "Metom APIの応答形式が想定と異なります。",
+  errorCharsetHttp: "NDL文字集合を取得できませんでした（HTTP {status}）。",
+  errorCharsetFormat: "NDL文字集合の形式を解釈できませんでした。",
+  errorImageFetch: "IIIF画像をOCR用に取得できません。画像サーバーのCORS設定を確認してください。{detail}",
+  errorImageHttp: "IIIF画像を取得できませんでした（HTTP {status}）。",
+  errorCanvasInit: "Canvas 2Dを初期化できませんでした。",
+  errorDetectionCanvas: "検出用Canvasを初期化できませんでした。",
+  errorRecognitionCanvas: "認識用Canvasを初期化できませんでした。",
+  errorVerticalCanvas: "縦書き回転用Canvasを初期化できませんでした。",
+  errorDetectionOutput: "NDL行検出モデルの出力形式が想定と異なります。",
+  errorRecognitionOutput: "NDL文字認識モデルの出力形式が想定と異なります。",
+  errorNoLines: "この画像から文字行を検出できませんでした。",
+  errorOcrCancelled: "OCRを中断しました。",
+  errorOcrGeneric: "ページOCRに失敗しました。",
+  errorGeneric: "処理に失敗しました。",
+  languageSelector: "言語",
+  english: "English",
+  japanese: "日本語",
+} as const;
+
+const en: Record<keyof typeof ja, string> = {
+  documentTitle: "Bokkei — Classical Japanese OCR Workbench",
+  documentDescription: "Load classical Japanese book images from a Kokusho Database bibliographic ID or IIIF Manifest, then run kuzushiji OCR and review the transcription.",
+  ogTitle: "Bokkei — Classical Japanese OCR Workbench",
+  ogDescription: "Open a classical Japanese image from a bibliographic ID or IIIF Manifest and compare detected regions with OCR transcription.",
+  homeAria: "Bokkei home",
+  externalMaterial: "EXTERNAL MATERIAL",
+  bibliographicId: "BIBLIOGRAPHIC ID {id}",
+  material: "MATERIAL",
+  chooseManifest: "Choose Manifest",
+  ocrBackend: "NDL OCR · ON-DEVICE",
+  pageList: "Page list",
+  pageNumber: "Page {number}, {label}",
+  viewer: "Classical Japanese book image viewer",
+  displayMethod: "Display mode",
+  originalImage: "Original",
+  inkEnhanced: "Ink enhanced",
+  ocrRegions: "OCR regions {count}",
+  noOcrCoordinates: "No OCR coordinates",
+  selectCharacter: "Select one character",
+  zoomOut: "Zoom out",
+  zoomLevel: "Zoom level",
+  zoomIn: "Zoom in",
+  imageAlt: "Image of {title}, {label}",
+  detectedRegions: "OCR detection regions",
+  detectedRegion: "OCR detection region {number}",
+  metomSelection: "Select a rectangle for Metom single-character recognition",
+  canvas: "IIIF CANVAS {number}",
+  dimensions: "{width} × {height} px",
+  noDimensions: "No original dimensions",
+  openingLeft: "Left opening",
+  openingRight: "Right opening",
+  previous: "← Previous",
+  next: "Next →",
+  recognitionResult: "RECOGNITION RESULT",
+  ocrHeading: "AI OCR · Transcription",
+  searchVariants: "Search variant characters",
+  searchRecognition: "Search recognition result",
+  autoOcr: "Automatic page OCR",
+  ndlOnDevice: "NDL Koten OCR-Lite · ON-DEVICE",
+  autoDetectLines: "Automatically detect and OCR kuzushiji lines",
+  modelNotice: "The model is about 82 MB on first use. Images are not sent to an OCR service.",
+  cancel: "Cancel",
+  rerunPage: "Re-run OCR on this page",
+  runPage: "Run automatic OCR on this page",
+  ndlUsage: "About NDL Koten OCR-Lite",
+  softwareUsed: "SOFTWARE",
+  ndlNoticeStart: "This service uses the trained model and processing method from the",
+  ndlApplication: "NDL Koten OCR-Lite application",
+  ndlNoticeMiddle: ", released by the National Diet Library under CC BY 4.0. The browser implementation is independent and is not an official service provided or operated by the National Diet Library.",
+  terms: "Terms ↗",
+  variantSoftware: "Variant character data: Kokusho Database variant-character SQL",
+  transcription: "Transcription",
+  variants: "Variants",
+  singleCharacterOcr: "Single-character OCR",
+  transcriptionResult: "OCR transcription result",
+  readingOrder: "Vertical writing · right to left",
+  canvasCoordinates: "Canvas coordinates synced",
+  noCoordinateData: "No coordinate data",
+  unreadable: "(Unreadable)",
+  ocrNotRun: "OCR not run",
+  runOcrInstruction: "Run “Run automatic OCR on this page” above.",
+  ocrConfidenceNote: "{engine} / {provider}. The displayed value is line-detection confidence, not the probability of each transcribed character.",
+  ocrDeviceDescription: "Runs NDL Koten OCR-Lite on this device to detect, transcribe, and position character lines.",
+  variantPanel: "Kokusho Database variant character list",
+  searchScope: "Search “{query}”",
+  allList: "All entries",
+  selectedOcrLine: "Matching the selected OCR line",
+  selectedLineOnly: "Selected line only",
+  variantGroups: "{count} / {groups} groups",
+  variantSource: "NIJL Kokusho DB variant-character SQL · {count} pairs",
+  github: "GitHub ↗",
+  mit: "MIT",
+  showMore: "Show more ({count} groups remaining)",
+  noVariants: "No matching variant characters",
+  noVariantsDetail: "No characters matched the Kokusho Database variant-character SQL.",
+  metomService: "Metom single-character recognition",
+  publicApi: "PUBLIC API",
+  metomInstructions: "Drag around one character in the image. The selection becomes an IIIF Image API crop URL, then Metom returns its top 10 candidates.",
+  metomAttribution: "Single-character OCR uses CODH's Metom service.",
+  metomLink: "Open Metom ↗",
+  metomCropAlt: "Single-character crop sent to Metom",
+  selectCharacterFromImage: "Select one character from the image",
+  metomRecognizing: "Recognizing with Metom…",
+  recognizeCharacter: "Recognize this character",
+  metomApiNote: "At runtime, the public IIIF crop URL is sent to CODH’s Metom API. Metom is a single-character classifier, not a full-page transcription service.",
+  fullPageOcr: "Full-page · region OCR",
+  loginReservation: "Login and a scheduled run are required",
+  openCurrentManifest: "Open current Manifest ↗",
+  recognitionConditions: "Recognition conditions",
+  lines: "{count} lines",
+  ocrModel: "OCR model",
+  iiifInput: "IIIF input",
+  ocrOutput: "OCR output",
+  coordinateText: "Line text with source coordinates",
+  imageProvider: "Image provided by: {attribution}",
+  publicDomain: "Public Domain Mark 1.0",
+  manifestTerms: "See the Manifest for terms",
+  manifestLink: "Manifest ↗",
+  presentationApi: "IIIF PRESENTATION API",
+  chooseManifestHeading: "Choose a Manifest",
+  close: "Close",
+  chooseFromKokusho: "Choose from the Kokusho Database",
+  specifyUrl: "Specify a URL",
+  manifestUrl: "IIIF Manifest URL",
+  manifestApiDescription: "Supports Presentation API 2 / 3. Canvas IDs and Image Service IDs are passed through to OCR.",
+  loadingManifest: "Loading Manifest…",
+  openManifest: "Open this Manifest",
+  currentMaterial: "CURRENT MATERIAL",
+  progressStarting: "Starting OCR",
+  progressImage: "Fetching IIIF image",
+  progressModels: "Preparing NDL models (about 82 MB on first use)",
+  progressDetect: "Detecting kuzushiji text lines",
+  progressRecognize: "Recognizing text lines {completed} / {total}",
+  progressDone: "OCR complete: {count} lines",
+  statusOcrNotRun: "OCR not run",
+  statusIiifLoaded: "IIIF image loaded",
+  statusOcrComplete: "Coordinate OCR complete",
+  errorInvalidRoute: "Use the /{bid} URL format. bid must be a numeric Kokusho Database bibliographic ID.",
+  errorHttpsManifest: "Specify an HTTPS Manifest URL.",
+  errorManifestHttp: "Could not fetch the Manifest (HTTP {status}).",
+  errorManifestTimeout: "The load timed out. Check the URL or its provider.",
+  errorManifestGeneric: "Could not load the Manifest.",
+  errorMetomUnsupported: "This Canvas has no Image Service ID or original dimensions, so a Metom crop cannot be created.",
+  errorMetomSelect: "Select one character in a rectangle on the image.",
+  errorMetomEmpty: "The Metom API returned no candidates.",
+  errorMetomTimeout: "The Metom API did not respond within 20 seconds.",
+  errorMetomGeneric: "Could not connect to the Metom API.",
+  errorManifestImages: "No image Canvases could be found. Check that this is an IIIF Presentation API v2/v3 Manifest.",
+  errorCropService: "This Canvas has no IIIF Image Service ID.",
+  errorCropDimensions: "The Manifest has no original Canvas dimensions, so crop coordinates cannot be calculated.",
+  errorMetomNonJson: "The Metom API returned a non-JSON response (HTTP {status}).",
+  errorMetomFailed: "The Metom API failed (HTTP {status}{detail}).",
+  errorMetomResponse: "The Metom API response has an unexpected format.",
+  errorCharsetHttp: "Could not fetch the NDL character set (HTTP {status}).",
+  errorCharsetFormat: "Could not parse the NDL character-set format.",
+  errorImageFetch: "Could not fetch the IIIF image for OCR. Check the image server’s CORS settings.{detail}",
+  errorImageHttp: "Could not fetch the IIIF image (HTTP {status}).",
+  errorCanvasInit: "Could not initialize the 2D canvas.",
+  errorDetectionCanvas: "Could not initialize the detection canvas.",
+  errorRecognitionCanvas: "Could not initialize the recognition canvas.",
+  errorVerticalCanvas: "Could not initialize the vertical-writing rotation canvas.",
+  errorDetectionOutput: "The NDL line-detection model returned an unexpected output format.",
+  errorRecognitionOutput: "The NDL text-recognition model returned an unexpected output format.",
+  errorNoLines: "No text lines could be detected in this image.",
+  errorOcrCancelled: "OCR was cancelled.",
+  errorOcrGeneric: "Page OCR failed.",
+  errorGeneric: "The operation failed.",
+  languageSelector: "Language",
+  english: "English",
+  japanese: "日本語",
+};
+
+export type TranslationKey = keyof typeof ja;
+
+const messages: Record<Locale, Record<TranslationKey, string>> = { ja, en };
+
+export class LocalizedError extends Error {
+  constructor(
+    readonly key: TranslationKey,
+    readonly params: MessageParams = {},
+  ) {
+    super(key);
+    this.name = "LocalizedError";
+  }
+}
+
+export function t(locale: Locale, key: TranslationKey, params: MessageParams = {}): string {
+  const template = messages[locale][key] ?? messages.ja[key];
+  return template.replace(/\{(\w+)\}/g, (placeholder, name: string) =>
+    name in params ? String(params[name]) : placeholder,
+  );
+}
+
+const countWords: Record<Locale, Record<CountUnit, [string, string]>> = {
+  ja: {
+    image: ["画像", "画像"],
+    group: ["組", "組"],
+    canvas: ["canvas", "canvas"],
+    line: ["行", "行"],
+  },
+  en: {
+    image: ["image", "images"],
+    group: ["group", "groups"],
+    canvas: ["canvas", "canvases"],
+    line: ["line", "lines"],
+  },
+};
+
+export function countLabel(locale: Locale, count: number, unit: CountUnit): string {
+  const word = countWords[locale][unit][locale === "en" && count === 1 ? 0 : 1];
+  return locale === "ja" ? `${count}${word}` : `${count} ${word}`;
+}
+
+export function statusLabel(locale: Locale, status: ManifestStatus): string {
+  const keys: Record<ManifestStatus, TranslationKey> = {
+    ocrNotRun: "statusOcrNotRun",
+    iiifLoaded: "statusIiifLoaded",
+    ocrComplete: "statusOcrComplete",
+  };
+  return t(locale, keys[status]);
+}
+
+export function progressMessage(
+  locale: Locale,
+  key: TranslationKey,
+  params: MessageParams = {},
+): string {
+  return t(locale, key, params);
+}
+
+export function localizeError(error: unknown, locale: Locale, fallback: TranslationKey = "errorGeneric"): string {
+  if (error instanceof LocalizedError) return t(locale, error.key, error.params);
+  if (error instanceof Error && error.message) return error.message;
+  return t(locale, fallback);
+}
+
+export function updateDocumentMetadata(locale: Locale): void {
+  if (typeof document === "undefined") return;
+
+  document.documentElement.lang = locale;
+  document.title = t(locale, "documentTitle");
+
+  const setMeta = (selector: string, content: string) => {
+    document.querySelector<HTMLMetaElement>(selector)?.setAttribute("content", content);
+  };
+
+  setMeta('meta[name="description"]', t(locale, "documentDescription"));
+  setMeta('meta[property="og:title"]', t(locale, "ogTitle"));
+  setMeta('meta[property="og:description"]', t(locale, "ogDescription"));
+  setMeta('meta[property="og:locale"]', locale === "en" ? "en_US" : "ja_JP");
+}
+
+export function isLocale(value: string | null): value is Locale {
+  return value === "ja" || value === "en";
+}
