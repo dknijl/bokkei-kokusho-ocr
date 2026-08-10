@@ -89,3 +89,9 @@ https://bokkei-ocr-workbench.askdkc.chatgpt.site/200021946
 - 初回OCRはNDLモデル約82MBとONNX Runtimeをダウンロードします。WASM動作はWebGPUより遅く、ページや端末によって数分かかる場合があります。
 - Metom を使う Canvas には IIIF Image Service ID と原寸 `width` / `height` が必要です。
 - OCR枠は行検出モデルが返した実座標だけを表示します。推測した固定枠はありません。
+
+## ライセンス
+
+本プロジェクトのソースコードは [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) の下で提供されています。ライセンス全文は [`LICENSE`](./LICENSE) を参照してください。
+
+本プロジェクトで利用している外部ソフトウェア、学習済みモデル、データ、サービスには、それぞれの提供元が定めるライセンスおよび利用条件が適用されます。NDL古典籍OCR-Liteおよび国書データベース異体字リストのライセンス情報は、上記「OCR連携」節を参照してください。
