@@ -7,9 +7,9 @@ export type MessageParams = Record<string, string | number>;
 export type CountUnit = "image" | "group" | "canvas" | "line";
 
 const ja = {
-  documentTitle: "墨景 — 古典籍OCRワークベンチ",
+  documentTitle: "墨景 — 古典籍AI OCR",
   documentDescription: "国書データベースの書誌IDやIIIF Manifestから古典籍画像を読み込み、崩し字OCRと校訂を行えるワークベンチです。",
-  ogTitle: "墨景 — 古典籍OCRワークベンチ",
+  ogTitle: "墨景 — 古典籍AI OCR",
   ogDescription: "書誌IDまたはIIIF Manifestから古典籍画像を開き、認識領域とOCR翻刻を比較。",
   homeAria: "墨景 ホーム",
   externalMaterial: "外部資料",
