@@ -318,10 +318,53 @@ function decodeDetections(
     detections.push({ x: x1, y: y1, width, height, confidence: Math.round(score * 100) });
   }
 
-  const vertical = detections.filter((item) => item.height > item.width).length >= detections.length / 2;
-  return detections.sort((a, b) => vertical
-    ? (b.x + (b.width / 2)) - (a.x + (a.width / 2)) || a.y - b.y
-    : (a.y + (a.height / 2)) - (b.y + (b.height / 2)) || a.x - b.x);
+  const verticalCount = detections.filter((item) => item.height > item.width).length;
+  const vertical = detections.length < verticalCount * 2;
+  const spans = detections.map((item) => vertical ? item.width : item.height);
+  const margin = median(spans) * 0.3;
+  const ordered = detections.sort((a, b) => {
+    const aX = a.x + (a.width / 2);
+    const bX = b.x + (b.width / 2);
+    const aY = a.y + (a.height / 2);
+    const bY = b.y + (b.height / 2);
+
+    if (vertical) {
+      if (margin < bX - aX) return 1;
+      if (margin < aX - bX) return -1;
+      return aY - bY;
+    }
+    if (margin < aY - bY) return 1;
+    if (margin < bY - aY) return -1;
+    return aX - bX;
+  });
+
+  const unique: Detection[] = [];
+  for (const detection of ordered) {
+    const previous = unique.at(-1);
+    if (!previous) {
+      unique.push(detection);
+      continue;
+    }
+
+    const intersectionWidth = Math.max(
+      0,
+      Math.min(previous.x + previous.width, detection.x + detection.width) - Math.max(previous.x, detection.x),
+    );
+    const intersectionHeight = Math.max(
+      0,
+      Math.min(previous.y + previous.height, detection.y + detection.height) - Math.max(previous.y, detection.y),
+    );
+    const intersection = intersectionWidth * intersectionHeight;
+    const overlap = intersection / Math.min(previous.width * previous.height, detection.width * detection.height);
+
+    if (overlap > 0.9) {
+      if (detection.confidence >= previous.confidence) unique[unique.length - 1] = detection;
+      continue;
+    }
+    unique.push(detection);
+  }
+
+  return unique;
 }
 
 function recognizerInput(source: HTMLCanvasElement, region: OcrRegion): ort.Tensor {

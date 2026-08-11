@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import {
     appPathFromManifestUrl,
     appRootPath,
@@ -64,6 +64,7 @@
   let fullOcrProgress = $state<NdlOcrProgress | null>(null);
   let fullOcrError = $state<unknown>(null);
   let ocrAbortController = $state<AbortController | null>(null);
+  let ocrTextExpanded = $state(false);
 
   let page = $derived(manifest.pages[pageIndex]);
   let average = $derived(
@@ -165,10 +166,18 @@
     zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom + delta));
   }
 
+  function scrollToOcrLine(index: number) {
+    void tick().then(() => {
+      document.querySelectorAll<HTMLButtonElement>(`.vertical-text button[data-line-index="${index}"]`)
+        .forEach((line) => line.scrollIntoView({ block: "nearest", inline: "nearest" }));
+    });
+  }
+
   function selectOcrLine(index: number) {
     selectedLine = index;
     variantBrowseAll = false;
     variantVisibleLimit = 120;
+    scrollToOcrLine(index);
   }
 
   function syncManifestPath(manifestUrl: string) {
@@ -256,9 +265,21 @@
 
   function handleWindowKeydown(event: KeyboardEvent) {
     if (event.key === "Escape") {
+      if (ocrTextExpanded) {
+        ocrTextExpanded = false;
+        return;
+      }
       pickerOpen = false;
       cropStart = null;
     }
+  }
+
+  function openOcrTextExpanded() {
+    ocrTextExpanded = true;
+  }
+
+  function closeOcrTextExpanded() {
+    ocrTextExpanded = false;
   }
 
   function relativePoint(event: PointerEvent) {
@@ -389,6 +410,7 @@
         overlay = true;
         variantBrowseAll = false;
         variantVisibleLimit = 120;
+        scrollToOcrLine(0);
       }
     } catch (error) {
       fullOcrError = error instanceof Error && error.name === "AbortError"
@@ -453,6 +475,21 @@
           <span></span>{ocrRegions.length ? t(locale, "ocrRegions", { count: ocrRegions.length }) : t(locale, "noOcrCoordinates")}
         </label>
         <button class:active={metomMode} class="crop-mode-button" onclick={openMetomPanel}>{t(locale, "selectCharacter")}</button>
+        <section class:running={fullOcrRunning} class="toolbar-ocr-action" aria-label={t(locale, "autoOcr")}>
+          {#if fullOcrRunning}
+            <button
+              class="toolbar-ocr-button cancel-ocr is-loading"
+              onclick={cancelFullOcr}
+              title={fullOcrProgress ? t(locale, fullOcrProgress.messageKey, fullOcrProgress.params) : t(locale, "cancel")}
+              aria-label={fullOcrProgress ? `${t(locale, "cancel")}: ${t(locale, fullOcrProgress.messageKey, fullOcrProgress.params)} ${fullOcrProgress.percent}%` : t(locale, "cancel")}
+            >
+              {#if fullOcrProgress}<span class="toolbar-ocr-fill" style={`width:${fullOcrProgress.percent}%`}></span>{/if}
+              <span class="toolbar-ocr-label"><span>{t(locale, "cancel")}</span>{#if fullOcrProgress}<b>{fullOcrProgress.percent}%</b>{/if}</span>
+            </button>
+          {:else}
+            <button class="toolbar-ocr-button run-full-ocr" onclick={() => void runFullPageOcr()}>{page.ocrEngine ? t(locale, "rerunPage") : t(locale, "runPage")}</button>
+          {/if}
+        </section>
         <div class="zoom-control">
           <button onclick={() => adjustZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label={t(locale, "zoomOut")}>−</button>
           <input id="viewer-zoom" aria-label={t(locale, "zoomLevel")} type="range" min={MIN_ZOOM} max={MAX_ZOOM} step="1" bind:value={zoom} />
@@ -520,36 +557,7 @@
 
       <label class="search-field"><span>⌕</span><input type="search" placeholder={panelTab === "variants" ? t(locale, "searchVariants") : t(locale, "searchRecognition")} bind:value={query} /><kbd>⌘ K</kbd></label>
 
-      <section class:running={fullOcrRunning} class="auto-ocr-card" aria-label={t(locale, "autoOcr")}>
-        <div class="auto-ocr-copy">
-          <span>{t(locale, "ndlOnDevice")}</span>
-          <strong>{t(locale, "autoDetectLines")}</strong>
-          <small>{t(locale, "modelNotice")}</small>
-        </div>
-        {#if fullOcrRunning}
-          <button class="cancel-ocr" onclick={cancelFullOcr}>{t(locale, "cancel")}</button>
-        {:else}
-          <button class="run-full-ocr" onclick={() => void runFullPageOcr()}>{page.ocrEngine ? t(locale, "rerunPage") : t(locale, "runPage")}</button>
-        {/if}
-        {#if fullOcrProgress}
-          <div class="ocr-progress" aria-live="polite">
-            <span style={`width:${fullOcrProgress.percent}%`}></span>
-            <small>{t(locale, fullOcrProgress.messageKey, fullOcrProgress.params)}</small><b>{fullOcrProgress.percent}%</b>
-          </div>
-        {/if}
-        {#if fullOcrError}<div class="full-ocr-error" role="alert">{localizeError(fullOcrError, locale, "errorOcrGeneric")}</div>{/if}
-      </section>
-
-      <aside class="ndl-usage-notice" aria-label={t(locale, "ndlUsage")}>
-        <strong>{t(locale, "softwareUsed")}</strong>
-        <p>
-          {t(locale, "ndlNoticeStart")} 
-          <a href="https://github.com/ndl-lab/ndlkotenocr-lite" target="_blank" rel="noreferrer">NDL古典籍OCR-Liteアプリケーション</a>
-          {t(locale, "ndlNoticeMiddle")} 
-          <a href="https://github.com/ndl-lab/ndlkotenocr-lite/blob/master/LICENCE" target="_blank" rel="noreferrer">{t(locale, "terms")}</a>
-          <br />{t(locale, "variantSoftware")} · <a href={itaijiSource.repository} target="_blank" rel="noreferrer">{t(locale, "github")}</a>
-        </p>
-      </aside>
+      {#if fullOcrError}<div class="full-ocr-error panel-ocr-error" role="alert">{localizeError(fullOcrError, locale, "errorOcrGeneric")}</div>{/if}
 
       <div class="panel-tabs three" role="tablist">
         <button class:active={panelTab === "text"} onclick={() => { panelTab = "text"; metomMode = false; }} role="tab" aria-selected={panelTab === "text"}>{t(locale, "transcription")}</button>
@@ -562,10 +570,22 @@
           <div class="reading-order">{t(locale, "readingOrder")} <span>{ocrRegions.length ? t(locale, "canvasCoordinates") : t(locale, "noCoordinateData")}</span></div>
           <div class="vertical-text">
             {#if page.result.length}
+              <button
+                type="button"
+                class="ocr-expand-button"
+                onclick={openOcrTextExpanded}
+                aria-label={t(locale, "expandOcrText")}
+                title={t(locale, "expandOcrText")}
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></svg>
+              </button>
+            {/if}
+            {#if page.result.length}
               {#each page.result as line, index (`${line.text}-${index}`)}
                 <button
                   class:active={selectedLine === index}
                   class:match={Boolean(query && line.text.includes(query))}
+                  data-line-index={index}
                   onclick={() => selectOcrLine(index)}
                 >
                   <span>{line.text || t(locale, "unreadable")}</span><small class:low={line.confidence < 75}>{line.confidence}%</small>
@@ -654,12 +674,60 @@
         </dl>
       </div>
 
+      <aside class="ndl-usage-notice" aria-label={t(locale, "ndlUsage")}>
+        <strong>{t(locale, "softwareUsed")}</strong>
+        <p>
+          {t(locale, "ndlNoticeStart")}
+          <a href="https://github.com/ndl-lab/ndlkotenocr-lite" target="_blank" rel="noreferrer">NDL古典籍OCR-Liteアプリケーション</a>
+          {t(locale, "ndlNoticeMiddle")}
+          <a href="https://github.com/ndl-lab/ndlkotenocr-lite/blob/master/LICENCE" target="_blank" rel="noreferrer">{t(locale, "terms")}</a>
+          <br />{t(locale, "variantSoftware")} · <a href={itaijiSource.repository} target="_blank" rel="noreferrer">{t(locale, "github")}</a>
+        </p>
+      </aside>
+
       <footer class="source-note">
         <div><span class="seal">IIIF</span><p>{t(locale, "imageProvider", { attribution: manifestAttribution })}<br />{manifest.license.includes("publicdomain") ? t(locale, "publicDomain") : t(locale, "manifestTerms")}</p></div>
         <a href={manifest.url} target="_blank" rel="noreferrer">{t(locale, "manifestLink")}</a>
       </footer>
     </aside>
   </section>
+
+  {#if ocrTextExpanded}
+    <div
+      class="ocr-text-lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label={t(locale, "transcriptionResult")}
+      tabindex="-1"
+      onmousedown={(event) => { if (event.currentTarget === event.target) closeOcrTextExpanded(); }}
+    >
+      <section class="ocr-text-dialog">
+        <header class="ocr-text-dialog-head">
+          <div><span class="eyebrow">{t(locale, "recognitionResult")}</span><strong>{t(locale, "transcription")}</strong></div>
+          <button class="ocr-text-close-button" type="button" onclick={closeOcrTextExpanded} aria-label={t(locale, "close")}>×</button>
+        </header>
+        <div class="ocr-text-dialog-body">
+          <div class="reading-order">{t(locale, "readingOrder")} <span>{ocrRegions.length ? t(locale, "canvasCoordinates") : t(locale, "noCoordinateData")}</span></div>
+          <div class="vertical-text expanded">
+            {#if page.result.length}
+              {#each page.result as line, index (`expanded-${line.text}-${index}`)}
+                <button
+                  class:active={selectedLine === index}
+                  class:match={Boolean(query && line.text.includes(query))}
+                  data-line-index={index}
+                  onclick={() => selectOcrLine(index)}
+                >
+                  <span>{line.text || t(locale, "unreadable")}</span><small class:low={line.confidence < 75}>{line.confidence}%</small>
+                </button>
+              {/each}
+            {:else}
+              <div class="ocr-empty"><strong>{t(locale, "ocrNotRun")}</strong><span>{t(locale, "runOcrInstruction")}</span></div>
+            {/if}
+          </div>
+        </div>
+      </section>
+    </div>
+  {/if}
 
   {#if pickerOpen}
     <div class="manifest-backdrop" role="presentation" onmousedown={(event) => { if (event.currentTarget === event.target) pickerOpen = false; }}>
