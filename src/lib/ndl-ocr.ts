@@ -45,6 +45,9 @@ type LoadedModels = {
 type Detection = OcrRegion & { confidence: number };
 
 let modelPromise: Promise<LoadedModels> | null = null;
+let releaseTimer: number | null = null;
+let activeOcrRuns = 0;
+let releasePromise: Promise<void> | null = null;
 
 ort.env.wasm.numThreads = 1;
 ort.env.wasm.simd = true;
@@ -56,7 +59,9 @@ const throwIfAborted = (signal?: AbortSignal) => {
 const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
 async function createSession(url: string, useWebGpu: boolean): Promise<ort.InferenceSession> {
-  const executionProviders = useWebGpu ? ["webgpu", "wasm"] : ["wasm"];
+  // Do not initialize WASM alongside WebGPU. The WASM backend probes
+  // SharedArrayBuffer even when it is only a fallback provider.
+  const executionProviders = useWebGpu ? ["webgpu"] : ["wasm"];
   return ort.InferenceSession.create(url, {
     executionProviders,
     graphOptimizationLevel: "all",
@@ -111,6 +116,61 @@ async function getModels(): Promise<LoadedModels> {
   return modelPromise;
 }
 
+function disposeTensors(values: ort.InferenceSession.OnnxValueMapType | null): void {
+  if (!values) return;
+  for (const value of Object.values(values)) {
+    if (value instanceof ort.Tensor) value.dispose();
+  }
+}
+
+function clearNdlOcrModelReleaseTimer(): void {
+  if (releaseTimer === null || typeof window === "undefined") return;
+  window.clearTimeout(releaseTimer);
+  releaseTimer = null;
+}
+
+export async function releaseNdlOcrModels(): Promise<void> {
+  if (activeOcrRuns > 0) return;
+  if (releasePromise) return releasePromise;
+
+  const pendingModels = modelPromise;
+  if (!pendingModels) return;
+
+  const releasing = (async () => {
+    try {
+      const models = await pendingModels;
+      if (activeOcrRuns > 0 || modelPromise !== pendingModels) return;
+      const results = await Promise.allSettled([
+        models.detector.release(),
+        models.recognizer.release(),
+      ]);
+      results
+        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+        .forEach((result) => console.warn("NDL OCR model release failed.", result.reason));
+    } catch (error) {
+      console.warn("NDL OCR model release failed.", error);
+    } finally {
+      if (modelPromise === pendingModels) modelPromise = null;
+    }
+  })();
+
+  releasePromise = releasing;
+  try {
+    await releasing;
+  } finally {
+    if (releasePromise === releasing) releasePromise = null;
+  }
+}
+
+export function scheduleNdlOcrModelRelease(): void {
+  if (typeof window === "undefined") return;
+  clearNdlOcrModelReleaseTimer();
+  releaseTimer = window.setTimeout(() => {
+    releaseTimer = null;
+    void releaseNdlOcrModels();
+  }, 120_000);
+}
+
 async function loadImage(url: string, signal?: AbortSignal): Promise<ImageBitmap> {
   let response: Response;
   try {
@@ -125,12 +185,18 @@ async function loadImage(url: string, signal?: AbortSignal): Promise<ImageBitmap
 
 function imageBitmapCanvas(bitmap: ImageBitmap): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) throw new LocalizedError("errorCanvasInit");
-  context.drawImage(bitmap, 0, 0);
-  return canvas;
+  try {
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new LocalizedError("errorCanvasInit");
+    context.drawImage(bitmap, 0, 0);
+    return canvas;
+  } catch (error) {
+    canvas.width = 0;
+    canvas.height = 0;
+    throw error;
+  }
 }
 
 function detectorInput(source: HTMLCanvasElement): { tensor: ort.Tensor; paddedSize: number } {
@@ -138,33 +204,40 @@ function detectorInput(source: HTMLCanvasElement): { tensor: ort.Tensor; paddedS
   const square = document.createElement("canvas");
   square.width = paddedSize;
   square.height = paddedSize;
-  const squareContext = square.getContext("2d");
-  if (!squareContext) throw new LocalizedError("errorDetectionCanvas");
-  squareContext.fillStyle = "#000";
-  squareContext.fillRect(0, 0, paddedSize, paddedSize);
-  squareContext.drawImage(source, 0, 0);
-
   const resized = document.createElement("canvas");
   resized.width = DETECTOR_SIZE;
   resized.height = DETECTOR_SIZE;
-  const context = resized.getContext("2d", { willReadFrequently: true });
-  if (!context) throw new LocalizedError("errorDetectionCanvas");
-  context.drawImage(square, 0, 0, DETECTOR_SIZE, DETECTOR_SIZE);
-  const pixels = context.getImageData(0, 0, DETECTOR_SIZE, DETECTOR_SIZE).data;
-  const plane = DETECTOR_SIZE * DETECTOR_SIZE;
-  const data = new Float32Array(plane * 3);
+  try {
+    const squareContext = square.getContext("2d");
+    if (!squareContext) throw new LocalizedError("errorDetectionCanvas");
+    squareContext.fillStyle = "#000";
+    squareContext.fillRect(0, 0, paddedSize, paddedSize);
+    squareContext.drawImage(source, 0, 0);
 
-  for (let index = 0; index < plane; index += 1) {
-    const pixel = index * 4;
-    data[index] = (pixels[pixel + 2] - 103.53) / 57.375;
-    data[plane + index] = (pixels[pixel + 1] - 116.28) / 57.12;
-    data[(plane * 2) + index] = (pixels[pixel] - 123.675) / 58.395;
+    const context = resized.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new LocalizedError("errorDetectionCanvas");
+    context.drawImage(square, 0, 0, DETECTOR_SIZE, DETECTOR_SIZE);
+    const pixels = context.getImageData(0, 0, DETECTOR_SIZE, DETECTOR_SIZE).data;
+    const plane = DETECTOR_SIZE * DETECTOR_SIZE;
+    const data = new Float32Array(plane * 3);
+
+    for (let index = 0; index < plane; index += 1) {
+      const pixel = index * 4;
+      data[index] = (pixels[pixel + 2] - 103.53) / 57.375;
+      data[plane + index] = (pixels[pixel + 1] - 116.28) / 57.12;
+      data[(plane * 2) + index] = (pixels[pixel] - 123.675) / 58.395;
+    }
+
+    return {
+      tensor: new ort.Tensor("float32", data, [1, 3, DETECTOR_SIZE, DETECTOR_SIZE]),
+      paddedSize,
+    };
+  } finally {
+    square.width = 0;
+    square.height = 0;
+    resized.width = 0;
+    resized.height = 0;
   }
-
-  return {
-    tensor: new ort.Tensor("float32", data, [1, 3, DETECTOR_SIZE, DETECTOR_SIZE]),
-    paddedSize,
-  };
 }
 
 function median(values: number[]): number {
@@ -180,95 +253,100 @@ function detectDocumentRegion(source: HTMLCanvasElement): OcrRegion | null {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) return null;
-  context.drawImage(source, 0, 0, width, height);
-  const pixels = context.getImageData(0, 0, width, height).data;
+  try {
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return null;
+    context.drawImage(source, 0, 0, width, height);
+    const pixels = context.getImageData(0, 0, width, height).data;
 
-  const borderReds: number[] = [];
-  const borderGreens: number[] = [];
-  const borderBlues: number[] = [];
-  const borderWidth = Math.max(1, Math.round(Math.min(width, height) * 0.025));
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      if (x >= borderWidth && x < width - borderWidth && y >= borderWidth && y < height - borderWidth) continue;
-      const offset = (y * width + x) * 4;
-      borderReds.push(pixels[offset]);
-      borderGreens.push(pixels[offset + 1]);
-      borderBlues.push(pixels[offset + 2]);
+    const borderReds: number[] = [];
+    const borderGreens: number[] = [];
+    const borderBlues: number[] = [];
+    const borderWidth = Math.max(1, Math.round(Math.min(width, height) * 0.025));
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        if (x >= borderWidth && x < width - borderWidth && y >= borderWidth && y < height - borderWidth) continue;
+        const offset = (y * width + x) * 4;
+        borderReds.push(pixels[offset]);
+        borderGreens.push(pixels[offset + 1]);
+        borderBlues.push(pixels[offset + 2]);
+      }
     }
-  }
-  const background = [median(borderReds), median(borderGreens), median(borderBlues)];
-  const foreground = new Uint8Array(width * height);
-  for (let index = 0; index < width * height; index += 1) {
-    const offset = index * 4;
-    const red = pixels[offset] - background[0];
-    const green = pixels[offset + 1] - background[1];
-    const blue = pixels[offset + 2] - background[2];
-    foreground[index] = Math.sqrt((red * red) + (green * green) + (blue * blue)) >= 24 ? 1 : 0;
-  }
+    const background = [median(borderReds), median(borderGreens), median(borderBlues)];
+    const foreground = new Uint8Array(width * height);
+    for (let index = 0; index < width * height; index += 1) {
+      const offset = index * 4;
+      const red = pixels[offset] - background[0];
+      const green = pixels[offset + 1] - background[1];
+      const blue = pixels[offset + 2] - background[2];
+      foreground[index] = Math.sqrt((red * red) + (green * green) + (blue * blue)) >= 24 ? 1 : 0;
+    }
 
-  const visited = new Uint8Array(width * height);
-  let best: { area: number; minX: number; minY: number; maxX: number; maxY: number } | null = null;
-  const queue = new Int32Array(width * height);
-  for (let start = 0; start < foreground.length; start += 1) {
-    if (!foreground[start] || visited[start]) continue;
-    let head = 0;
-    let tail = 0;
-    queue[tail++] = start;
-    visited[start] = 1;
-    let area = 0;
-    let minX = width;
-    let minY = height;
-    let maxX = 0;
-    let maxY = 0;
+    const visited = new Uint8Array(width * height);
+    let best: { area: number; minX: number; minY: number; maxX: number; maxY: number } | null = null;
+    const queue = new Int32Array(width * height);
+    for (let start = 0; start < foreground.length; start += 1) {
+      if (!foreground[start] || visited[start]) continue;
+      let head = 0;
+      let tail = 0;
+      queue[tail++] = start;
+      visited[start] = 1;
+      let area = 0;
+      let minX = width;
+      let minY = height;
+      let maxX = 0;
+      let maxY = 0;
 
-    while (head < tail) {
-      const index = queue[head++];
-      const x = index % width;
-      const y = Math.floor(index / width);
-      area += 1;
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-      const neighbors = [index - 1, index + 1, index - width, index + width];
-      for (const neighbor of neighbors) {
-        if (neighbor < 0 || neighbor >= foreground.length || visited[neighbor] || !foreground[neighbor]) continue;
-        const neighborX = neighbor % width;
-        if (Math.abs(neighborX - x) > 1) continue;
-        visited[neighbor] = 1;
-        queue[tail++] = neighbor;
+      while (head < tail) {
+        const index = queue[head++];
+        const x = index % width;
+        const y = Math.floor(index / width);
+        area += 1;
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+        const neighbors = [index - 1, index + 1, index - width, index + width];
+        for (const neighbor of neighbors) {
+          if (neighbor < 0 || neighbor >= foreground.length || visited[neighbor] || !foreground[neighbor]) continue;
+          const neighborX = neighbor % width;
+          if (Math.abs(neighborX - x) > 1) continue;
+          visited[neighbor] = 1;
+          queue[tail++] = neighbor;
+        }
+      }
+
+      const componentWidth = maxX - minX + 1;
+      const componentHeight = maxY - minY + 1;
+      const fillRatio = area / (componentWidth * componentHeight);
+      if (
+        area >= width * height * 0.03
+        && componentWidth >= width * 0.18
+        && componentHeight >= height * 0.18
+        && fillRatio >= 0.22
+        && (!best || area > best.area)
+      ) {
+        best = { area, minX, minY, maxX, maxY };
       }
     }
 
-    const componentWidth = maxX - minX + 1;
-    const componentHeight = maxY - minY + 1;
-    const fillRatio = area / (componentWidth * componentHeight);
-    if (
-      area >= width * height * 0.03
-      && componentWidth >= width * 0.18
-      && componentHeight >= height * 0.18
-      && fillRatio >= 0.22
-      && (!best || area > best.area)
-    ) {
-      best = { area, minX, minY, maxX, maxY };
-    }
+    if (!best) return null;
+    const padding = Math.max(2, Math.round(Math.min(width, height) * 0.015));
+    const x1 = Math.max(0, best.minX - padding);
+    const y1 = Math.max(0, best.minY - padding);
+    const x2 = Math.min(width, best.maxX + padding + 1);
+    const y2 = Math.min(height, best.maxY + padding + 1);
+    if ((x2 - x1) >= width * 0.96 && (y2 - y1) >= height * 0.96) return null;
+    return {
+      x: x1 / scale,
+      y: y1 / scale,
+      width: (x2 - x1) / scale,
+      height: (y2 - y1) / scale,
+    };
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
   }
-
-  if (!best) return null;
-  const padding = Math.max(2, Math.round(Math.min(width, height) * 0.015));
-  const x1 = Math.max(0, best.minX - padding);
-  const y1 = Math.max(0, best.minY - padding);
-  const x2 = Math.min(width, best.maxX + padding + 1);
-  const y2 = Math.min(height, best.maxY + padding + 1);
-  if ((x2 - x1) >= width * 0.96 && (y2 - y1) >= height * 0.96) return null;
-  return {
-    x: x1 / scale,
-    y: y1 / scale,
-    width: (x2 - x1) / scale,
-    height: (y2 - y1) / scale,
-  };
 }
 
 function decodeDetections(
@@ -318,10 +396,53 @@ function decodeDetections(
     detections.push({ x: x1, y: y1, width, height, confidence: Math.round(score * 100) });
   }
 
-  const vertical = detections.filter((item) => item.height > item.width).length >= detections.length / 2;
-  return detections.sort((a, b) => vertical
-    ? (b.x + (b.width / 2)) - (a.x + (a.width / 2)) || a.y - b.y
-    : (a.y + (a.height / 2)) - (b.y + (b.height / 2)) || a.x - b.x);
+  const verticalCount = detections.filter((item) => item.height > item.width).length;
+  const vertical = detections.length < verticalCount * 2;
+  const spans = detections.map((item) => vertical ? item.width : item.height);
+  const margin = median(spans) * 0.3;
+  const ordered = detections.sort((a, b) => {
+    const aX = a.x + (a.width / 2);
+    const bX = b.x + (b.width / 2);
+    const aY = a.y + (a.height / 2);
+    const bY = b.y + (b.height / 2);
+
+    if (vertical) {
+      if (margin < bX - aX) return 1;
+      if (margin < aX - bX) return -1;
+      return aY - bY;
+    }
+    if (margin < aY - bY) return 1;
+    if (margin < bY - aY) return -1;
+    return aX - bX;
+  });
+
+  const unique: Detection[] = [];
+  for (const detection of ordered) {
+    const previous = unique.at(-1);
+    if (!previous) {
+      unique.push(detection);
+      continue;
+    }
+
+    const intersectionWidth = Math.max(
+      0,
+      Math.min(previous.x + previous.width, detection.x + detection.width) - Math.max(previous.x, detection.x),
+    );
+    const intersectionHeight = Math.max(
+      0,
+      Math.min(previous.y + previous.height, detection.y + detection.height) - Math.max(previous.y, detection.y),
+    );
+    const intersection = intersectionWidth * intersectionHeight;
+    const overlap = intersection / Math.min(previous.width * previous.height, detection.width * detection.height);
+
+    if (overlap > 0.9) {
+      if (detection.confidence >= previous.confidence) unique[unique.length - 1] = detection;
+      continue;
+    }
+    unique.push(detection);
+  }
+
+  return unique;
 }
 
 function recognizerInput(source: HTMLCanvasElement, region: OcrRegion): ort.Tensor {
@@ -415,60 +536,97 @@ export async function recognizePageWithNdlLite(
   onProgress: ProgressCallback,
   signal?: AbortSignal,
 ): Promise<NdlOcrResult> {
-  throwIfAborted(signal);
-  onProgress({ stage: "image", percent: 3, messageKey: "progressImage" });
-  const bitmap = await loadImage(imageUrl, signal);
-  throwIfAborted(signal);
-  const source = imageBitmapCanvas(bitmap);
-  bitmap.close();
+  clearNdlOcrModelReleaseTimer();
+  activeOcrRuns += 1;
 
-  onProgress({ stage: "models", percent: 8, messageKey: "progressModels" });
-  const models = await getModels();
-  throwIfAborted(signal);
-
-  onProgress({ stage: "detect", percent: 22, messageKey: "progressDetect" });
-  const { tensor, paddedSize } = detectorInput(source);
-  const documentRegion = detectDocumentRegion(source);
-  const detectionOutputs = await models.detector.run({ [models.detector.inputNames[0]]: tensor });
-  const detections = decodeDetections(detectionOutputs, paddedSize, source.width, source.height, documentRegion);
-  throwIfAborted(signal);
-  if (!detections.length) throw new LocalizedError("errorNoLines");
-
-  const lines: OcrLine[] = [];
-  for (let index = 0; index < detections.length; index += 1) {
+  try {
     throwIfAborted(signal);
-    const detection = detections[index];
-    onProgress({
-      stage: "recognize",
-      percent: 28 + Math.round(((index + 1) / detections.length) * 68),
-      messageKey: "progressRecognize",
-      params: { completed: index + 1, total: detections.length },
-      completed: index + 1,
-      total: detections.length,
-    });
-    const input = recognizerInput(source, detection);
-    const outputs = await models.recognizer.run({ [models.recognizer.inputNames[0]]: input });
-    lines.push({
-      text: decodeText(outputs, models.charset),
-      confidence: detection.confidence,
-      region: { x: detection.x, y: detection.y, width: detection.width, height: detection.height },
-    });
-    await nextFrame();
-  }
+    onProgress({ stage: "image", percent: 3, messageKey: "progressImage" });
+    const bitmap = await loadImage(imageUrl, signal);
+    let source: HTMLCanvasElement;
+    try {
+      throwIfAborted(signal);
+      source = imageBitmapCanvas(bitmap);
+    } finally {
+      bitmap.close();
+    }
 
-  onProgress({
-    stage: "done",
-    percent: 100,
-    messageKey: "progressDone",
-    params: { count: lines.length },
-    completed: lines.length,
-    total: lines.length,
-  });
-  return {
-    imageWidth: source.width,
-    imageHeight: source.height,
-    lines,
-    provider: models.provider,
-    revision: MODEL_REVISION,
-  };
+    try {
+      onProgress({ stage: "models", percent: 8, messageKey: "progressModels" });
+      const models = await getModels();
+      throwIfAborted(signal);
+
+      onProgress({ stage: "detect", percent: 22, messageKey: "progressDetect" });
+      const { tensor, paddedSize } = detectorInput(source);
+      let detectionOutputs: ort.InferenceSession.OnnxValueMapType | null = null;
+      let detections: Detection[];
+      try {
+        const documentRegion = detectDocumentRegion(source);
+        detectionOutputs = await models.detector.run({ [models.detector.inputNames[0]]: tensor });
+        detections = decodeDetections(
+          detectionOutputs,
+          paddedSize,
+          source.width,
+          source.height,
+          documentRegion,
+        );
+      } finally {
+        tensor.dispose();
+        disposeTensors(detectionOutputs);
+      }
+
+      throwIfAborted(signal);
+      if (!detections.length) throw new LocalizedError("errorNoLines");
+
+      const lines: OcrLine[] = [];
+      for (let index = 0; index < detections.length; index += 1) {
+        throwIfAborted(signal);
+        const detection = detections[index];
+        onProgress({
+          stage: "recognize",
+          percent: 28 + Math.round(((index + 1) / detections.length) * 68),
+          messageKey: "progressRecognize",
+          params: { completed: index + 1, total: detections.length },
+          completed: index + 1,
+          total: detections.length,
+        });
+        const input = recognizerInput(source, detection);
+        let outputs: ort.InferenceSession.OnnxValueMapType | null = null;
+        try {
+          outputs = await models.recognizer.run({ [models.recognizer.inputNames[0]]: input });
+          lines.push({
+            text: decodeText(outputs, models.charset),
+            confidence: detection.confidence,
+            region: { x: detection.x, y: detection.y, width: detection.width, height: detection.height },
+          });
+        } finally {
+          input.dispose();
+          disposeTensors(outputs);
+        }
+        await nextFrame();
+      }
+
+      onProgress({
+        stage: "done",
+        percent: 100,
+        messageKey: "progressDone",
+        params: { count: lines.length },
+        completed: lines.length,
+        total: lines.length,
+      });
+      return {
+        imageWidth: source.width,
+        imageHeight: source.height,
+        lines,
+        provider: models.provider,
+        revision: MODEL_REVISION,
+      };
+    } finally {
+      source.width = 0;
+      source.height = 0;
+    }
+  } finally {
+    activeOcrRuns -= 1;
+    if (activeOcrRuns === 0) scheduleNdlOcrModelRelease();
+  }
 }
