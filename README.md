@@ -15,18 +15,18 @@ React、Next.js、Vinext、Tailwind、Drizzle は使用していません。
 
 ## OCR連携
 
-### NDL古典籍OCR-Lite — 全頁自動OCR
+### NDL古典籍OCR-Lite — ページ自動OCR
 
-右ペインの「このページを自動OCR」を実行すると、国立国会図書館の [`ndlkotenocr-lite`](https://github.com/ndl-lab/ndlkotenocr-lite) をブラウザ内で動かします。
+画像ビューワーのツールバーにある「このページを自動OCR」を実行すると、国立国会図書館の [`ndlkotenocr-lite`](https://github.com/ndl-lab/ndlkotenocr-lite) をブラウザ内で動かします。OCR対象は現在選択中の1ページです。
 
-1. IIIF Image API から長辺2000pxの画像を取得
+1. IIIF Image Serviceから長辺2000pxの画像を取得（Image Serviceがない場合はManifestの画像URLを使用）
 2. 外周色と最大連結領域から資料の紙面を抽出し、定規・カラーチャートを除外
 3. RTMDet（`rtmdet-s-1280x1280.onnx`）で文字行を自動検出
 4. 縦長の行を横向きに回転
 5. PARSeq（`parseq-ndl-32x384-tiny-10.onnx`）で各行を認識
 6. 検出した実座標と翻刻を重ねて表示
 
-モデルは再現性のため `ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8` に固定しています。モデル合計は約82MBです。RTMDetのファイル名は1280ですが、固定したONNXグラフの実入力はメタデータどおり1024×1024です。対応ブラウザではWebGPUを優先し、初期化できない場合はWASMへフォールバックします。画像は外部OCR APIへ送らず端末内で推論します。ただし、IIIF画像とNDLモデル自体は配信元からダウンロードします。
+モデルは再現性のため `ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8` に固定しています。モデル合計は約82MBです。RTMDetのファイル名は1280ですが、固定したONNXグラフの実入力はメタデータどおり1024×1024です。対応ブラウザではWebGPUを優先し、初期化できない場合は単一スレッドのWASMへフォールバックします。画像は外部OCR APIへ送らず端末内で推論します。ただし、IIIF画像とNDLモデル自体は配信元からダウンロードします。
 
 本サービスは、国立国会図書館がCC BY 4.0で公開する「NDL古典籍OCR-Liteアプリケーション」の学習済みモデルおよび処理方式を利用しています。ブラウザ向け実装は本サービス独自であり、国立国会図書館が提供・運営する公式サービスではありません。配布元と利用条件は [`ndl-lab/ndlkotenocr-lite`](https://github.com/ndl-lab/ndlkotenocr-lite) を参照してください。
 
@@ -58,6 +58,10 @@ Metom は一文字分類器です。ページ全体のレイアウト解析や�
 ### KuroNet / RURI
 
 現在の Manifest URL を公式 KuroNet IIIF Curation Viewer の `manifest` パラメータに渡します。KuroNet は Firebase ログインとダッシュボード上の予約実行を必要とするため、このサイトが認証情報を代理取得したり非公開APIを直接呼んだりはしません。
+
+## 閲覧UI
+
+デスクトップでは、ページ一覧・画像ビューワー・OCR結果の3ペインで表示します。画面幅が狭い場合は、ページ一覧を横スクロールできるサムネイル列に切り替え、画像とOCR結果を切り替えて表示します。画像表示、OCR枠、文字検索、異体字検索、Metomの一文字選択はデスクトップとモバイルの両方で利用できます。
 
 ## 開発
 
@@ -92,19 +96,20 @@ base: "/biblio/ocr/",
 
 ## 書誌IDによるURL指定
 
-サイトURLの直後に国書データベースの書誌IDを付けると、その資料のManifestを起動時に読み込みます。
+アプリのベースパス（既定は`/ocr/`）の直後に国書データベースの書誌IDを付けると、その資料のManifestを起動時に読み込みます。
 
 ```text
-https://bokkei-ocr-workbench.askdkc.chatgpt.site/200021946
+https://DEV_URL/ocr/200021946
 ```
 
-上記は `https://kokusho.nijl.ac.jp/biblio/200021946/manifest` を読み込みます。Manifest選択画面から国書データベースの資料を開いた場合も、同じ共有可能なURL形式へ更新します。
+上記は `https://kokusho.nijl.ac.jp/biblio/200021946/manifest` を読み込みます。`?canvas=17`を付けると、1始まりのCanvas番号で17ページ目を指定できます。Manifest選択画面から国書データベースの資料を開いた場合やページを移動した場合も、同じ共有可能なURL形式へ更新します。
 
 ## 制限
 
 - 外部 Manifest はブラウザから取得するため、配信元が CORS を許可している必要があります。
 - 全頁OCRでは画像ピクセルをCanvasで読むため、IIIF Image APIもCORSを許可している必要があります。
-- 初回OCRはNDLモデル約82MBとONNX Runtimeをダウンロードします。WASM動作はWebGPUより遅く、ページや端末によって数分かかる場合があります。
+- 初回OCRはNDLモデル約82MBとONNX Runtimeをダウンロードします。WASM動作はWebGPUより遅く、ページや端末によって数分かかる場合があります。WebGPU非対応または初期化失敗時はWASMへフォールバックします。
+- WASMフォールバック時、cross-origin isolationを設定していない環境では、ブラウザの開発者コンソールに`SharedArrayBuffer`関連の警告が表示される場合があります。OCRは単一スレッドで実行します。
 - Metom を使う Canvas には IIIF Image Service ID と原寸 `width` / `height` が必要です。
 - OCR枠は行検出モデルが返した実座標だけを表示します。推測した固定枠はありません。
 
