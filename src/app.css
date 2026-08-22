@@ -21,6 +21,7 @@ body {
   color: #f0eee8;
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Yu Gothic", "Hiragino Kaku Gothic ProN", sans-serif;
   min-width: 320px;
+  overflow-x: hidden;
 }
 
 button, input, textarea { font: inherit; }
@@ -91,7 +92,43 @@ a { color: inherit; text-decoration: none; }
 .export-button { padding: 0 16px; background: var(--paper); color: var(--ink); font-weight: 700; font-size: 12px; }
 .square-button:hover, .export-button:hover, .manifest-button:hover { border-color: var(--cyan); }
 
-.workspace { min-height: calc(100vh - 64px); display: grid; grid-template-columns: 132px minmax(520px, 1fr) 390px; }
+.workspace { min-width: 0; min-height: calc(100vh - 64px); display: grid; grid-template-columns: 96px minmax(520px, 1fr) 390px; }
+.narrow-pane-switcher {
+  display: none;
+  min-height: 44px;
+  border-bottom: 1px solid var(--line);
+  background: #111916;
+}
+.narrow-pane-switcher button {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: #8e9c95;
+  cursor: pointer;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.narrow-pane-switcher button.active {
+  background: #25312c;
+  color: var(--paper);
+  box-shadow: inset 0 -2px var(--cyan);
+}
+.narrow-pane-switcher button span {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  margin-left: 6px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--cyan-deep);
+  color: white;
+  font-size: 10px;
+}
 
 .page-rail { height: calc(100vh - 64px); overflow-y: auto; border-right: 1px solid var(--line); background: #0e1613; padding: 18px 14px; display: flex; flex-direction: column; align-items: stretch; gap: 12px; scrollbar-width: thin; scrollbar-color: #405048 transparent; }
 .rail-count { color: #77847d; text-align: center; font: 10px/1.2 ui-monospace, monospace; letter-spacing: .12em; margin-bottom: 4px; }
@@ -356,13 +393,43 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 }
 
 @media (max-width: 900px) {
+  .app-shell { height: 100dvh; min-height: 0; overflow: hidden; }
   .topbar { grid-template-columns: 1fr auto; padding: 0 16px; }
   .document-title { display: none; }
-  .workspace { display: grid; grid-template-columns: 82px 1fr; }
-  .text-panel { grid-column: 1 / -1; min-height: 620px; border-left: 0; border-top: 1px solid var(--line); }
+  .workspace {
+    height: calc(100dvh - 64px);
+    min-height: 0;
+    grid-template-columns: 62px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .page-rail {
+    grid-column: 1;
+    grid-row: 1 / -1;
+    height: auto;
+    min-height: 0;
+  }
+  .narrow-pane-switcher {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    display: flex;
+  }
+  .image-stage,
+  .text-panel {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+    min-height: 0;
+  }
+  .text-panel {
+    display: none;
+    border-left: 0;
+    border-top: 0;
+  }
+  .workspace.show-narrow-ocr .image-stage { display: none; }
+  .workspace.show-narrow-ocr .text-panel { display: flex; }
+  .viewer-toolbar { min-width: 0; }
   .thumb img { height: 72px; }
-  .image-stage { min-height: 690px; }
-  .page-rail { height: 690px; }
   .manifest-dialog-body { grid-template-columns: 1fr; }
   .preset-section { border-right: 0; border-bottom: 1px solid var(--line); }
 }
@@ -374,19 +441,72 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
   .manifest-button span { margin: 0; font-size: 9px; }
   .language-switch button { min-width: 30px; }
   .square-button { display: none; }
-  .workspace { grid-template-columns: 1fr; }
-  .page-rail { display: none; }
-  .image-stage { min-height: 610px; }
-  .viewer-toolbar { gap: 10px; padding-inline: 10px; }
+  .workspace {
+    height: calc(100dvh - 64px);
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 96px 44px minmax(0, 1fr);
+  }
+  .page-rail {
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+    height: 96px;
+    min-width: 0;
+    min-height: 0;
+    padding: 8px 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    scroll-snap-type: x proximity;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  .rail-count {
+    flex: 0 0 auto;
+    align-self: center;
+    margin: 0;
+    writing-mode: vertical-rl;
+  }
+  .thumb {
+    flex: 0 0 64px;
+    min-width: 64px;
+    min-height: 80px;
+    scroll-snap-align: center;
+  }
+  .thumb img { width: 56px; height: 70px; }
+  .rail-add { flex: 0 0 64px; min-height: 70px; }
+  .narrow-pane-switcher { grid-column: 1; grid-row: 2; }
+  .image-stage,
+  .text-panel {
+    grid-column: 1;
+    grid-row: 3;
+  }
+  .image-stage { grid-template-rows: auto minmax(0, 1fr) 52px; }
+  .viewer-toolbar {
+    gap: 8px;
+    min-height: 54px;
+    padding: 8px 10px;
+    flex-wrap: wrap;
+    align-content: center;
+    overflow: hidden;
+  }
+  .segmented button { min-width: 56px; }
   .overlay-toggle { font-size: 0; }
-  .toolbar-ocr-button { width: 120px; max-width: 120px; padding-inline: 8px; font-size: 9px; }
+  .crop-mode-button { padding-inline: 7px; font-size: 9px; }
+  .toolbar-ocr-button { width: 112px; max-width: 112px; padding-inline: 8px; font-size: 9px; }
   .zoom-control input { width: 58px; }
-  .canvas-wrap { padding: 24px 24px 43px; }
-  .manuscript { min-width: 250px; }
+  .canvas-wrap { padding: 16px 12px calc(42px + env(safe-area-inset-bottom)); }
+  .manuscript { min-width: 0; }
   .canvas-meta span:nth-child(2) { display: none; }
   .vertical-text { height: 420px; }
   .ocr-expand-button { opacity: 1; transform: none; }
-  .text-panel { min-height: 610px; }
+  .text-panel { min-height: 0; overflow-y: auto; padding-bottom: env(safe-area-inset-bottom); }
+  .page-controls { padding-bottom: env(safe-area-inset-bottom); }
   .panel-tabs.three button { font-size: 9px; }
   .manifest-backdrop { padding: 0; align-items: end; }
   .manifest-dialog { width: 100%; max-height: 92vh; }

@@ -1,5 +1,10 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 .openai
+PLAN.md
+AGENT.md
+CLAUDE.md
+CODEX.md
+.opencode
 
 # dependencies
 /node_modules
@@ -36,6 +41,7 @@ yarn-error.log*
 .vercel
 
 /dist/
+/.svelte-check/
 /.wrangler/
 /outputs/
 /work/
