@@ -1,11 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import {
-    appPathFromManifestUrl,
-    appRootPath,
     initialManifest,
     manifestPresets,
-    manifestUrlFromAppPath,
     localizedText,
     parseManifest,
     type ViewerManifest,
@@ -23,7 +20,14 @@
     recognizePageWithNdlLite,
     type NdlOcrProgress,
   } from "./lib/ndl-ocr";
+  import { createViewerDebug, type PendingOcrMarker } from "./lib/debug";
   import { findItaijiEntries, itaijiSource } from "./lib/itaiji";
+  import { parseViewerLocation, viewerPathFromManifestUrl } from "./lib/viewer-route";
+  import {
+    applyOcrResult,
+    findPageIndexByCanvasId,
+    resolveInitialPageIndex,
+  } from "./lib/viewer-state";
   import {
     countLabel,
     isLocale,
@@ -38,6 +42,10 @@
   let manifest: ViewerManifest = $state(initialManifest);
   let locale: Locale = $state("ja");
   let pageIndex = $state(0);
+  let selectedCanvasId = $state(initialManifest.pages[0]?.canvasId ?? "");
+  let narrowPane: "viewer" | "ocr" = $state("viewer");
+  let hasLoadedManifest = false;
+  const selectedCanvasStorageKey = "bokkei-selected-canvas";
   const MIN_ZOOM = 40;
   const MAX_ZOOM = 200;
   const ZOOM_STEP = 10;
@@ -67,6 +75,11 @@
   let ocrTextExpanded = $state(false);
 
   let page = $derived(manifest.pages[pageIndex]);
+  const viewerDebug = createViewerDebug(() => ({
+    manifestUrl: manifest.url,
+    pageIndex,
+    canvasId: manifest.pages[pageIndex]?.canvasId,
+  }));
   let average = $derived(
     page.result.length
       ? Math.round(page.result.reduce((sum, line) => sum + line.confidence, 0) / page.result.length)
@@ -138,28 +151,108 @@
 
   function resetFullOcrState() {
     cancelFullOcr();
+    ocrAbortController = null;
+    fullOcrRunning = false;
     fullOcrProgress = null;
     fullOcrError = null;
   }
 
+  function storedCanvasIdFor(manifestUrl: string): string | undefined {
+    try {
+      const raw = window.sessionStorage.getItem(selectedCanvasStorageKey);
+      if (!raw) return undefined;
+      const stored = JSON.parse(raw) as { manifestUrl?: unknown; canvasId?: unknown };
+      return stored.manifestUrl === manifestUrl && typeof stored.canvasId === "string"
+        ? stored.canvasId
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function storeCanvasId(manifestUrl: string, canvasId: string): void {
+    try {
+      window.sessionStorage.setItem(
+        selectedCanvasStorageKey,
+        JSON.stringify({ manifestUrl, canvasId }),
+      );
+    } catch {
+      // Page selection should continue when storage is unavailable.
+    }
+  }
+
+  function revealActiveThumbnail(index: number): void {
+    requestAnimationFrame(() => {
+      const target = document.querySelector<HTMLElement>(
+        `.thumb[data-page-index="${index}"]`,
+      );
+      target?.scrollIntoView({
+        block: "nearest",
+        inline: "center",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "auto"
+          : "smooth",
+      });
+    });
+  }
+
+  function preserveDebugQuery(path: string): string {
+    const nextUrl = new URL(path, window.location.origin);
+    const debugQuery = new URLSearchParams(window.location.search).get("debug");
+    if (debugQuery) nextUrl.searchParams.set("debug", debugQuery);
+    nextUrl.hash = window.location.hash;
+    return `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
+  }
+
+  function syncManifestPath(nextManifestUrl: string, nextPageIndex: number): void {
+    const nextPath = preserveDebugQuery(
+      viewerPathFromManifestUrl(nextManifestUrl, nextPageIndex + 1),
+    );
+    const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentPath !== nextPath) window.history.pushState(null, "", nextPath);
+  }
+
+  function syncCanvasPath(index: number): void {
+    const nextPath = preserveDebugQuery(viewerPathFromManifestUrl(manifest.url, index + 1));
+    const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentPath !== nextPath) window.history.replaceState(null, "", nextPath);
+  }
+
+  function setSelectedPage(index: number, syncHistory = true): void {
+    const nextIndex = Math.min(manifest.pages.length - 1, Math.max(0, index));
+    const nextPage = manifest.pages[nextIndex];
+    if (!nextPage) return;
+
+    pageIndex = nextIndex;
+    selectedCanvasId = nextPage.canvasId;
+    storeCanvasId(manifest.url, nextPage.canvasId);
+    narrowPane = "viewer";
+    if (syncHistory) syncCanvasPath(nextIndex);
+    revealActiveThumbnail(nextIndex);
+  }
+
   function selectPage(index: number) {
     resetFullOcrState();
-    pageIndex = index;
+    setSelectedPage(index);
     selectedLine = 0;
     overlay = false;
     variantBrowseAll = false;
     variantVisibleLimit = 120;
     resetMetom();
+    viewerDebug.log("page-selected", { reason: "thumbnail" });
   }
 
   function movePage(delta: number) {
+    const nextIndex = Math.min(manifest.pages.length - 1, Math.max(0, pageIndex + delta));
+    if (nextIndex === pageIndex) return;
     resetFullOcrState();
-    pageIndex = Math.min(manifest.pages.length - 1, Math.max(0, pageIndex + delta));
+    setSelectedPage(nextIndex);
     selectedLine = 0;
     overlay = false;
     variantBrowseAll = false;
     variantVisibleLimit = 120;
     resetMetom();
+    viewerDebug.log("page-moved", { delta });
   }
 
   function adjustZoom(delta: number) {
@@ -180,41 +273,62 @@
     scrollToOcrLine(index);
   }
 
-  function syncManifestPath(manifestUrl: string) {
-    const nextPath = appPathFromManifestUrl(manifestUrl);
-    if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextPath) {
-      window.history.pushState(null, "", nextPath);
-    }
+  function restoreCanvas(canvasNumber?: number): void {
+    resetFullOcrState();
+    setSelectedPage(resolveInitialPageIndex({
+      pages: manifest.pages,
+      routeCanvasNumber: canvasNumber,
+    }), false);
+    selectedLine = 0;
+    overlay = false;
+    variantBrowseAll = false;
+    variantVisibleLimit = 120;
+    resetMetom();
+    viewerDebug.log("page-selected", { reason: "history" });
   }
 
-  function loadManifestFromLocation(loadRoot = false) {
-    const { pathname } = window.location;
-    const rootPath = appRootPath();
-    if (pathname === "/" || pathname === "" || pathname === rootPath || pathname === rootPath.replace(/\/$/, "")) {
-      if (loadRoot) void loadManifest(initialManifest.url, false, true);
+  function loadManifestFromLocation(forceLoad = false) {
+    const route = parseViewerLocation(window.location);
+    if (route.isRoot) {
+      if (forceLoad) void loadManifest(initialManifest.url, false, true, route.canvasNumber);
       return;
     }
 
-    const routeManifestUrl = manifestUrlFromAppPath(pathname);
-    if (!routeManifestUrl) {
+    if (!route.manifestUrl) {
       manifestUrl = initialManifest.url;
       loadError = new LocalizedError("errorInvalidRoute");
       pickerOpen = true;
       return;
     }
 
-    void loadManifest(routeManifestUrl, false, true);
+    if (!forceLoad && route.manifestUrl === manifest.url) {
+      restoreCanvas(route.canvasNumber);
+      return;
+    }
+
+    void loadManifest(route.manifestUrl, false, true, route.canvasNumber);
   }
 
   function handlePopState() {
-    loadManifestFromLocation(true);
+    viewerDebug.log("popstate");
+    loadManifestFromLocation();
   }
 
-  async function loadManifest(urlValue: string, syncRoute = true, revealError = false) {
+  async function loadManifest(
+    urlValue: string,
+    syncRoute = true,
+    revealError = false,
+    routeCanvasNumber?: number,
+  ) {
     const normalized = urlValue.trim();
+    const previousManifestUrl = manifest.url;
+    const previousCanvasId = hasLoadedManifest
+      ? manifest.pages[pageIndex]?.canvasId ?? selectedCanvasId
+      : undefined;
     loadError = null;
     resetFullOcrState();
     manifestUrl = normalized;
+    viewerDebug.log("manifest-load-start", { url: normalized });
 
     try {
       const parsedUrl = new URL(normalized);
@@ -223,23 +337,44 @@
       loadingUrl = normalized;
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 15000);
-      const response = await fetch(normalized, { signal: controller.signal, cache: "no-store" });
-      window.clearTimeout(timeout);
+      let response: Response;
+      try {
+        response = await fetch(normalized, { signal: controller.signal, cache: "no-store" });
+      } finally {
+        window.clearTimeout(timeout);
+      }
       if (!response.ok) throw new LocalizedError("errorManifestHttp", { status: response.status });
 
       const raw = (await response.json()) as Record<string, unknown>;
       const nextManifest = parseManifest(raw, normalized, locale);
+      const sameManifest = nextManifest.url === previousManifestUrl;
+      const restoredIndex = resolveInitialPageIndex({
+        pages: nextManifest.pages,
+        routeCanvasNumber,
+        previousCanvasId: sameManifest ? previousCanvasId : undefined,
+        storedCanvasId: storedCanvasIdFor(nextManifest.url),
+      });
       manifest = nextManifest;
       manifestUrl = nextManifest.url;
-      pageIndex = 0;
+      pageIndex = restoredIndex;
+      selectedCanvasId = nextManifest.pages[restoredIndex]?.canvasId ?? "";
+      hasLoadedManifest = true;
+      if (selectedCanvasId) storeCanvasId(nextManifest.url, selectedCanvasId);
       selectedLine = 0;
       query = "";
       overlay = false;
       variantBrowseAll = false;
       variantVisibleLimit = 120;
+      narrowPane = "viewer";
       pickerOpen = false;
       resetMetom();
-      if (syncRoute) syncManifestPath(nextManifest.url);
+      if (syncRoute) syncManifestPath(nextManifest.url, restoredIndex);
+      revealActiveThumbnail(restoredIndex);
+      viewerDebug.log("manifest-load-complete", {
+        url: nextManifest.url,
+        restoredCanvasId: selectedCanvasId,
+        restoredPageIndex: restoredIndex,
+      });
     } catch (error) {
       loadError = error instanceof Error && error.name === "AbortError"
         ? new LocalizedError("errorManifestTimeout")
@@ -247,8 +382,13 @@
           ? error
           : new LocalizedError("errorManifestGeneric");
       if (revealError) pickerOpen = true;
+      viewerDebug.log("manifest-load-complete", {
+        url: normalized,
+        success: false,
+        error: loadError instanceof Error ? loadError.message : String(loadError),
+      });
     } finally {
-      loadingUrl = "";
+      if (loadingUrl === normalized) loadingUrl = "";
     }
   }
 
@@ -260,7 +400,33 @@
       // Use Japanese when persisted preferences cannot be read.
     }
     updateDocumentMetadata(locale);
-    loadManifestFromLocation();
+    const pendingOcr = viewerDebug.readPendingOcr();
+    viewerDebug.log("app-mounted", pendingOcr
+      ? {
+          pendingOcr,
+          reloadedDuringOcr: pendingOcr.instanceId !== viewerDebug.instanceId,
+        }
+      : undefined);
+
+    const handlePageShow = () => viewerDebug.log("pageshow");
+    const handlePageHide = (event: PageTransitionEvent) => viewerDebug.log("pagehide", { persisted: event.persisted });
+    const handleBeforeUnload = () => viewerDebug.log("beforeunload");
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => viewerDebug.log(
+      "unhandledrejection",
+      { reason: event.reason instanceof Error ? event.reason.message : String(event.reason) },
+    );
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("pagehide", handlePageHide);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("unhandledrejection", handleUnhandledRejection);
+    loadManifestFromLocation(true);
+
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("pagehide", handlePageHide);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("unhandledrejection", handleUnhandledRejection);
+    };
   });
 
   function handleWindowKeydown(event: KeyboardEvent) {
@@ -365,9 +531,11 @@
     if (fullOcrRunning) return;
 
     const targetPage = page;
-    const targetPageIndex = pageIndex;
     const targetManifestUrl = manifest.url;
+    const targetCanvasId = targetPage.canvasId;
+    const startedAt = Date.now();
     const controller = new AbortController();
+    let pendingOcr: PendingOcrMarker | null = null;
     ocrAbortController = controller;
     fullOcrRunning = true;
     fullOcrError = null;
@@ -375,50 +543,79 @@
     metomMode = false;
     overlay = false;
     fullOcrProgress = { stage: "image", percent: 1, messageKey: "progressStarting" };
+    pendingOcr = viewerDebug.setPendingOcr({
+      manifestUrl: targetManifestUrl,
+      canvasId: targetCanvasId,
+      pageIndex,
+      startedAt,
+    });
+    viewerDebug.log("ocr-start", { canvasId: targetCanvasId });
 
     try {
       const result = await recognizePageWithNdlLite(
         buildNdlOcrImageUrl(targetPage),
         (progress) => {
-          if (ocrAbortController === controller) fullOcrProgress = progress;
+          if (ocrAbortController === controller) {
+            fullOcrProgress = progress;
+            viewerDebug.log("ocr-progress", {
+              canvasId: targetCanvasId,
+              stage: progress.stage,
+              percent: progress.percent,
+              completed: progress.completed,
+              total: progress.total,
+            });
+          }
         },
         controller.signal,
       );
-      if (controller.signal.aborted || manifest.url !== targetManifestUrl) return;
+      if (controller.signal.aborted) {
+        viewerDebug.log("ocr-cancelled", { canvasId: targetCanvasId, reason: "aborted" });
+        return;
+      }
 
-      const coordinateWidth = targetPage.width || result.imageWidth;
-      const coordinateHeight = targetPage.height || result.imageHeight;
-      const scaleX = coordinateWidth / result.imageWidth;
-      const scaleY = coordinateHeight / result.imageHeight;
-      targetPage.width = coordinateWidth;
-      targetPage.height = coordinateHeight;
-      targetPage.result = result.lines.map((line) => ({
-        ...line,
-        region: line.region ? {
-          x: line.region.x * scaleX,
-          y: line.region.y * scaleY,
-          width: line.region.width * scaleX,
-          height: line.region.height * scaleY,
-        } : undefined,
-      }));
-      targetPage.ocrEngine = `NDL古典籍OCR-Lite · ${result.revision.slice(0, 8)}`;
-      targetPage.ocrProvider = result.provider;
-      manifest.status = "ocrComplete";
+      const applied = applyOcrResult({
+        manifest,
+        targetManifestUrl,
+        targetCanvasId,
+        result,
+      });
+      if (!applied.applied) {
+        viewerDebug.log("ocr-cancelled", {
+          canvasId: targetCanvasId,
+          reason: manifest.url === targetManifestUrl ? "canvas-not-found" : "manifest-changed",
+        });
+        return;
+      }
 
-      if (pageIndex === targetPageIndex) {
+      if (manifest.pages[pageIndex]?.canvasId === targetCanvasId) {
         selectedLine = 0;
         overlay = true;
         variantBrowseAll = false;
         variantVisibleLimit = 120;
         scrollToOcrLine(0);
       }
+      viewerDebug.log("ocr-success", {
+        canvasId: targetCanvasId,
+        lineCount: result.lines.length,
+        appliedPageIndex: applied.pageIndex,
+      });
     } catch (error) {
-      fullOcrError = error instanceof Error && error.name === "AbortError"
+      const isCurrentOcr = ocrAbortController === controller;
+      if (isCurrentOcr) fullOcrError = error instanceof Error && error.name === "AbortError"
         ? new LocalizedError("errorOcrCancelled")
         : error instanceof Error
           ? error
           : new LocalizedError("errorOcrGeneric");
+      viewerDebug.log(
+        error instanceof Error && error.name === "AbortError" ? "ocr-cancelled" : "ocr-error",
+        {
+          canvasId: targetCanvasId,
+          error: error instanceof Error ? error.message : String(error),
+          current: isCurrentOcr,
+        },
+      );
     } finally {
+      viewerDebug.clearPendingOcr(pendingOcr);
       if (ocrAbortController === controller) {
         fullOcrRunning = false;
         ocrAbortController = null;
@@ -444,40 +641,61 @@
 
     <div class="top-actions">
       <div class="language-switch" role="group" aria-label={t(locale, "languageSelector")}>
-        <button class:active={locale === "ja"} onclick={() => setLocale("ja")} aria-pressed={locale === "ja"}>{t(locale, "japanese")}</button>
-        <button class:active={locale === "en"} onclick={() => setLocale("en")} aria-pressed={locale === "en"}>EN</button>
+        <button type="button" class:active={locale === "ja"} onclick={() => setLocale("ja")} aria-pressed={locale === "ja"}>{t(locale, "japanese")}</button>
+        <button type="button" class:active={locale === "en"} onclick={() => setLocale("en")} aria-pressed={locale === "en"}>EN</button>
       </div>
-      <button class="manifest-button" onclick={() => (pickerOpen = true)}><span>{t(locale, "material")}</span> {t(locale, "chooseManifest")}</button>
+      <button type="button" class="manifest-button" onclick={() => (pickerOpen = true)}><span>{t(locale, "material")}</span> {t(locale, "chooseManifest")}</button>
       <span class="ocr-backend-state"><i></i> {t(locale, "ocrBackend")}</span>
     </div>
   </header>
 
-  <section class="workspace" id="viewer">
+  <section class:show-narrow-ocr={narrowPane === "ocr"} class="workspace" id="viewer">
     <aside class="page-rail" aria-label={t(locale, "pageList")}>
       <div class="rail-count">{String(pageIndex + 1).padStart(2, "0")} / {String(manifest.pages.length).padStart(2, "0")}</div>
       {#each manifest.pages as item, index (`${item.canvasId}-${index}`)}
-        <button class:active={pageIndex === index} class="thumb" onclick={() => selectPage(index)} aria-label={t(locale, "pageNumber", { number: index + 1, label: pageLabelFor(item) })}>
+        <button type="button" data-page-index={index} class:active={pageIndex === index} class="thumb" onclick={() => selectPage(index)} aria-label={t(locale, "pageNumber", { number: index + 1, label: pageLabelFor(item) })}>
           <img src={item.thumbnail} alt="" loading="lazy" decoding="async" />
           <span>{index + 1}</span>
         </button>
       {/each}
-      <button class="rail-add" onclick={() => (pickerOpen = true)}><b>＋</b><span>Manifest</span></button>
+      <button type="button" class="rail-add" onclick={() => (pickerOpen = true)}><b>＋</b><span>Manifest</span></button>
     </aside>
+
+    <nav class="narrow-pane-switcher" aria-label={t(locale, "mobilePaneSelector")}>
+      <button
+        type="button"
+        class:active={narrowPane === "viewer"}
+        aria-pressed={narrowPane === "viewer"}
+        onclick={() => (narrowPane = "viewer")}
+      >
+        {t(locale, "viewer")}
+      </button>
+      <button
+        type="button"
+        class:active={narrowPane === "ocr"}
+        aria-pressed={narrowPane === "ocr"}
+        onclick={() => (narrowPane = "ocr")}
+      >
+        {t(locale, "recognitionResult")}
+        {#if page.result.length}<span>{page.result.length}</span>{/if}
+      </button>
+    </nav>
 
     <section class="image-stage" aria-label={t(locale, "viewer")}>
       <div class="viewer-toolbar">
         <div class="segmented" aria-label={t(locale, "displayMethod")}>
-          <button class:active={viewMode === "original"} onclick={() => (viewMode = "original")}>{t(locale, "originalImage")}</button>
-          <button class:active={viewMode === "contrast"} onclick={() => (viewMode = "contrast")}>{t(locale, "inkEnhanced")}</button>
+          <button type="button" class:active={viewMode === "original"} onclick={() => (viewMode = "original")}>{t(locale, "originalImage")}</button>
+          <button type="button" class:active={viewMode === "contrast"} onclick={() => (viewMode = "contrast")}>{t(locale, "inkEnhanced")}</button>
         </div>
         <label class:disabled={!ocrRegions.length} class="overlay-toggle">
-          <input type="checkbox" bind:checked={overlay} disabled={!ocrRegions.length} />
+          <input id="ocr-overlay" name="ocr-overlay" type="checkbox" bind:checked={overlay} disabled={!ocrRegions.length} />
           <span></span>{ocrRegions.length ? t(locale, "ocrRegions", { count: ocrRegions.length }) : t(locale, "noOcrCoordinates")}
         </label>
-        <button class:active={metomMode} class="crop-mode-button" onclick={openMetomPanel}>{t(locale, "selectCharacter")}</button>
+        <button type="button" class:active={metomMode} class="crop-mode-button" onclick={openMetomPanel}>{t(locale, "selectCharacter")}</button>
         <section class:running={fullOcrRunning} class="toolbar-ocr-action" aria-label={t(locale, "autoOcr")}>
           {#if fullOcrRunning}
             <button
+              type="button"
               class="toolbar-ocr-button cancel-ocr is-loading"
               onclick={cancelFullOcr}
               title={fullOcrProgress ? t(locale, fullOcrProgress.messageKey, fullOcrProgress.params) : t(locale, "cancel")}
@@ -487,13 +705,13 @@
               <span class="toolbar-ocr-label"><span>{t(locale, "cancel")}</span>{#if fullOcrProgress}<b>{fullOcrProgress.percent}%</b>{/if}</span>
             </button>
           {:else}
-            <button class="toolbar-ocr-button run-full-ocr" onclick={() => void runFullPageOcr()}>{page.ocrEngine ? t(locale, "rerunPage") : t(locale, "runPage")}</button>
+            <button type="button" class="toolbar-ocr-button run-full-ocr" onclick={() => void runFullPageOcr()}>{page.ocrEngine ? t(locale, "rerunPage") : t(locale, "runPage")}</button>
           {/if}
         </section>
         <div class="zoom-control">
-          <button onclick={() => adjustZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label={t(locale, "zoomOut")}>−</button>
-          <input id="viewer-zoom" aria-label={t(locale, "zoomLevel")} type="range" min={MIN_ZOOM} max={MAX_ZOOM} step="1" bind:value={zoom} />
-          <button onclick={() => adjustZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label={t(locale, "zoomIn")}>＋</button>
+          <button type="button" onclick={() => adjustZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label={t(locale, "zoomOut")}>−</button>
+          <input id="viewer-zoom" name="zoom" aria-label={t(locale, "zoomLevel")} type="range" min={MIN_ZOOM} max={MAX_ZOOM} step="1" bind:value={zoom} />
+          <button type="button" onclick={() => adjustZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label={t(locale, "zoomIn")}>＋</button>
           <output for="viewer-zoom">{zoom}%</output>
         </div>
       </div>
@@ -507,6 +725,7 @@
             <div class="ocr-boxes" aria-label={t(locale, "detectedRegions")}>
               {#each ocrRegions as region (region.index)}
                 <button
+                  type="button"
                   class:active={selectedLine === region.index}
                   class="ocr-box"
                   style={`left:${(region.x / page.width) * 100}%;top:${(region.y / page.height) * 100}%;width:${(region.width / page.width) * 100}%;height:${(region.height / page.height) * 100}%`}
@@ -543,9 +762,9 @@
       </div>
 
       <div class="page-controls">
-        <button onclick={() => movePage(-1)} disabled={pageIndex === 0}>{t(locale, "previous")}</button>
+        <button type="button" onclick={() => movePage(-1)} disabled={pageIndex === 0}>{t(locale, "previous")}</button>
         <span><strong>{pageIndex + 1}</strong> / {manifest.pages.length}</span>
-        <button onclick={() => movePage(1)} disabled={pageIndex === manifest.pages.length - 1}>{t(locale, "next")}</button>
+        <button type="button" onclick={() => movePage(1)} disabled={pageIndex === manifest.pages.length - 1}>{t(locale, "next")}</button>
       </div>
     </section>
 
@@ -555,14 +774,14 @@
         <div class="confidence-ring" style={`--score: ${average * 3.6}deg`}><strong>{average}</strong><small>%</small></div>
       </div>
 
-      <label class="search-field"><span>⌕</span><input type="search" placeholder={panelTab === "variants" ? t(locale, "searchVariants") : t(locale, "searchRecognition")} bind:value={query} /><kbd>⌘ K</kbd></label>
+      <label class="search-field" for="recognition-search"><span>⌕</span><input id="recognition-search" name="query" type="search" placeholder={panelTab === "variants" ? t(locale, "searchVariants") : t(locale, "searchRecognition")} bind:value={query} /><kbd>⌘ K</kbd></label>
 
       {#if fullOcrError}<div class="full-ocr-error panel-ocr-error" role="alert">{localizeError(fullOcrError, locale, "errorOcrGeneric")}</div>{/if}
 
       <div class="panel-tabs three" role="tablist">
-        <button class:active={panelTab === "text"} onclick={() => { panelTab = "text"; metomMode = false; }} role="tab" aria-selected={panelTab === "text"}>{t(locale, "transcription")}</button>
-        <button class:active={panelTab === "variants"} onclick={() => { panelTab = "variants"; metomMode = false; }} role="tab" aria-selected={panelTab === "variants"}>{t(locale, "variants")} <span>{itaijiSource.pairCount}</span></button>
-        <button class:active={panelTab === "metom"} onclick={openMetomPanel} role="tab" aria-selected={panelTab === "metom"}>{t(locale, "singleCharacterOcr")}</button>
+        <button type="button" class:active={panelTab === "text"} onclick={() => { panelTab = "text"; metomMode = false; }} role="tab" aria-selected={panelTab === "text"}>{t(locale, "transcription")}</button>
+        <button type="button" class:active={panelTab === "variants"} onclick={() => { panelTab = "variants"; metomMode = false; }} role="tab" aria-selected={panelTab === "variants"}>{t(locale, "variants")} <span>{itaijiSource.pairCount}</span></button>
+        <button type="button" class:active={panelTab === "metom"} onclick={openMetomPanel} role="tab" aria-selected={panelTab === "metom"}>{t(locale, "singleCharacterOcr")}</button>
       </div>
 
       {#if panelTab === "text"}
@@ -583,6 +802,7 @@
             {#if page.result.length}
               {#each page.result as line, index (`${line.text}-${index}`)}
                 <button
+                  type="button"
                   class:active={selectedLine === index}
                   class:match={Boolean(query && line.text.includes(query))}
                   data-line-index={index}
@@ -602,7 +822,7 @@
           <header class="variant-summary">
             <div><span>{variantScopeLabel}</span><strong>{variantMatches.length}<small> / {countLabel(locale, itaijiSource.groupCount, "group")}</small></strong></div>
             {#if selectedOcrText && !query.trim()}
-              <button onclick={() => { variantBrowseAll = !variantBrowseAll; variantVisibleLimit = 120; }}>
+              <button type="button" onclick={() => { variantBrowseAll = !variantBrowseAll; variantVisibleLimit = 120; }}>
                 {variantBrowseAll ? t(locale, "selectedLineOnly") : t(locale, "allList")}
               </button>
             {/if}
@@ -624,7 +844,7 @@
               {/each}
             </div>
             {#if visibleVariantMatches.length < variantMatches.length}
-              <button class="variant-more" onclick={() => (variantVisibleLimit += 120)}>
+              <button type="button" class="variant-more" onclick={() => (variantVisibleLimit += 120)}>
                 {t(locale, "showMore", { count: variantMatches.length - visibleVariantMatches.length })}
               </button>
             {/if}
@@ -643,9 +863,9 @@
           {#if crop}
             <div class="crop-preview"><img src={metomCropUrl} alt={t(locale, "metomCropAlt")} /><code>{Math.round(crop.width)}% × {Math.round(crop.height)}%</code></div>
           {:else}
-            <button class="select-character" onclick={() => (metomMode = true)}>{t(locale, "selectCharacterFromImage")}</button>
+            <button type="button" class="select-character" onclick={() => (metomMode = true)}>{t(locale, "selectCharacterFromImage")}</button>
           {/if}
-          <button class="run-metom" onclick={() => void runMetom()} disabled={!crop || metomLoading}>
+          <button type="button" class="run-metom" onclick={() => void runMetom()} disabled={!crop || metomLoading}>
             {metomLoading ? t(locale, "metomRecognizing") : t(locale, "recognizeCharacter")}
           </button>
           {#if metomError}<div class="metom-error" role="alert">{localizeError(metomError, locale, "errorMetomGeneric")}</div>{/if}
@@ -712,6 +932,7 @@
             {#if page.result.length}
               {#each page.result as line, index (`expanded-${line.text}-${index}`)}
                 <button
+                  type="button"
                   class:active={selectedLine === index}
                   class:match={Boolean(query && line.text.includes(query))}
                   data-line-index={index}
@@ -734,7 +955,7 @@
       <div class="manifest-dialog" role="dialog" aria-modal="true" aria-labelledby="manifest-title">
         <header class="manifest-dialog-head">
           <div><span class="eyebrow">{t(locale, "presentationApi")}</span><h2 id="manifest-title">{t(locale, "chooseManifestHeading")}</h2></div>
-          <button onclick={() => (pickerOpen = false)} aria-label={t(locale, "close")}>×</button>
+          <button type="button" onclick={() => (pickerOpen = false)} aria-label={t(locale, "close")}>×</button>
         </header>
 
         <div class="manifest-dialog-body">
@@ -742,7 +963,7 @@
             <h3>{t(locale, "chooseFromKokusho")}</h3>
             <div class="preset-list">
               {#each manifestPresets as preset, index (preset.url)}
-                <button class:active={manifest.url === preset.url} class="preset" onclick={() => void loadManifest(preset.url)} disabled={Boolean(loadingUrl)}>
+                <button type="button" class:active={manifest.url === preset.url} class="preset" onclick={() => void loadManifest(preset.url)} disabled={Boolean(loadingUrl)}>
                   <span class="preset-index">{String(index + 1).padStart(2, "0")}</span>
                   <span class="preset-copy"><strong>{preset.title}</strong><small>{presetDetail(index)}</small></span>
                   <span class="preset-tag">{loadingUrl === preset.url ? t(locale, "loadingManifest") : presetTag(index)}</span>
