@@ -10,10 +10,14 @@
     "build": "node build/run-vite-build.mjs",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json --tsgo",
-    "test": "npm run check && npm run build",
+    "test:unit": "node --experimental-strip-types --test src/lib/ocr/ocr.test.ts",
+    "test:browser": "playwright test",
+    "test": "npm run check && npm run test:unit && npm run build",
+    "test:all": "npm test && npm run test:browser",
     "update:itaiji": "node scripts/update-itaiji.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@types/node": "26.2.0",
     "@typescript/native": "npm:typescript@^7.0.2",

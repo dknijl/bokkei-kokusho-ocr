@@ -20,17 +20,18 @@ React、Next.js、Vinext、Tailwind、Drizzle は使用していません。
 画像ビューワーのツールバーにある「このページを自動OCR」を実行すると、国立国会図書館の [`ndlkotenocr-lite`](https://github.com/ndl-lab/ndlkotenocr-lite) をブラウザ内で動かします。OCR対象は現在選択中の1ページです。
 
 1. IIIF Image Serviceから長辺2000pxの画像を取得（Image Serviceがない場合はManifestの画像URLを使用）
-2. 外周色と最大連結領域から資料の紙面を抽出し、定規・カラーチャートを除外
-3. RTMDet（`rtmdet-s-1280x1280.onnx`）で文字行を自動検出
-4. 縦長の行を横向きに回転
-5. PARSeq（`parseq-ndl-32x384-tiny-10.onnx`）で各行を認識
-6. 検出した実座標と翻刻を重ねて表示
+2. RTMDet（`rtmdet-s-1280x1280.onnx`）で文字行を検出し、プロファイル別閾値とglobal NMSで候補を整理
+3. 紙面外という理由だけでは行を削除せず、見開きや書き入れを保持
+4. 行矩形をfloor/ceilで外向きに切り出し、縦長の行を横向きに回転
+5. PARSeq（`parseq-ndl-32x384-tiny-10.onnx`）で認識し、token score・top-2 margin・EOSを計算
+6. 低信頼行だけpadding候補とIIIF高解像度cropを上限付きで再認識し、元画像候補を残して決定的に選択
+7. 検出した実座標、検出スコア、未較正の認識スコア、翻刻を重ねて表示
 
 モデルは再現性のため `ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8` に固定しています。モデル合計は約82MBです。RTMDetのファイル名は1280ですが、固定したONNXグラフの実入力はメタデータどおり1024×1024です。対応ブラウザではWebGPUを優先し、初期化できない場合は単一スレッドのWASMへフォールバックします。画像は外部OCR APIへ送らず端末内で推論します。ただし、IIIF画像とNDLモデル自体は配信元からダウンロードします。
 
 本サービスは、国立国会図書館がCC BY 4.0で公開する「NDL古典籍OCR-Liteアプリケーション」の学習済みモデルおよび処理方式を利用しています。ブラウザ向け実装は本サービス独自であり、国立国会図書館が提供・運営する公式サービスではありません。配布元と利用条件は [`ndl-lab/ndlkotenocr-lite`](https://github.com/ndl-lab/ndlkotenocr-lite) を参照してください。
 
-検出モデルのスコアを行単位で表示します。これは翻刻文字ごとの確率ではありません。読み順は、縦書きが多数なら右から左、横書きが多数なら上から下、という簡略版です。NDLのPython版に含まれる完全な読み順解析を移植したものではありません。
+既定のOCRプロファイルは`balanced`です。低信頼行の追加認識は1ページあたりの上限を持ち、WASMでも無制限に増えません。画面またはAPIで`accurate`を選んだ場合だけ、grayscale-contrast、background-normalized、ink-channel、adaptive-binaryの候補、適応タイル検出、長行分割候補を追加できます。画面の認識スコアはtoken尤度から作る未較正の候補比較値で、文字ごとの正解確率ではありません。検出スコアとは別に保存します。結果はモデルリビジョン、パイプライン、Manifest、Canvas、optionsを含むIndexedDBへ保存し、同じ条件では再推論を避けます。`?debug=ocr`で現在ページの結果をJSON/CSVへ書き出せ、正解JSONを貼り付けてCER、完全一致行率、検出Recall/F1を計算できます。読み順は認識順と分離し、縦書きの列または横書きの行をXY-Cut相当の決定的な規則で並べ替えます。NDLのPython版に含まれる完全な読み順解析を移植したものではありません。実資料による精度改善はまだ測定していません。
 
 ### 国書データベース異体字リスト
 
@@ -72,9 +73,13 @@ npm install
 npm run dev
 npm run check
 npm run build
+npm run test:browser
+npm run test:all
 ```
 
 `npm test` は Svelte の型・アクセシビリティ検査後に本番ビルドを実行します。本番出力は `dist/client`、Sites 用 Worker は `dist/server/index.js` です。
+
+ブラウザのsmoke testはPlaywright Chromiumを使用します。初回のみ `npx playwright install chromium` を実行してください。Manifest HTTPエラー、OCRプロファイル選択、狭い画面のペイン切り替えを検査しますが、実モデルのWebGPU/WASM精度評価は含みません。
 
 ## 配信パス
 

@@ -21,6 +21,18 @@ export const itaijiEntries: readonly ItaijiEntry[] = KOKUSHO_ITAIJI_ENTRIES.map(
   ([normalized, variants]) => ({ normalized, variants }),
 );
 
+const itaijiNormalizationPairs = itaijiEntries
+  .flatMap((entry) => entry.variants.map((variant) => ({ variant, normalized: entry.normalized })))
+  .filter((pair) => pair.variant !== pair.normalized)
+  .sort((first, second) => Array.from(second.variant).length - Array.from(first.variant).length);
+
+export function normalizeItaijiText(value: string): string {
+  return itaijiNormalizationPairs.reduce(
+    (text, pair) => text.replaceAll(pair.variant, pair.normalized),
+    value,
+  );
+}
+
 const matchingPosition = (text: string, entry: ItaijiEntry) => {
   let position = Number.POSITIVE_INFINITY;
   for (const term of [entry.normalized, ...entry.variants]) {

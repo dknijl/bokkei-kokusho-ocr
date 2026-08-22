@@ -16,12 +16,38 @@
     type MetomPrediction,
   } from "./lib/ocr";
   import {
-    buildNdlOcrImageUrl,
     recognizePageWithNdlLite,
+    NDL_MODEL_REVISION,
+    type NdlOcrResult,
     type NdlOcrProgress,
   } from "./lib/ndl-ocr";
+import {
+  DEFAULT_NDL_OCR_OPTIONS,
+  recognitionRetryThresholdForProfile,
+  type NdlOcrOptions,
+  type OcrProfile,
+} from "./lib/ocr/profiles";
+  import {
+    createOcrBenchmarkBaseline,
+    createOcrBenchmarkRecord,
+    downloadBenchmarkFile,
+    OCR_PIPELINE_VERSION,
+    parseOcrGroundTruthJson,
+    serializeBenchmarkCsv,
+    serializeBenchmarkJson,
+    serializeOcrBenchmarkBaselineJson,
+  } from "./lib/ocr/benchmark";
+  import type { OcrPageMetrics } from "./lib/ocr/metrics";
+  import {
+    buildOcrCacheKeyForPage,
+    cacheEntryFromResult,
+    deleteOcrCache,
+    readOcrCache,
+    resultFromOcrCache,
+    writeOcrCache,
+  } from "./lib/ocr/cache";
   import { createViewerDebug, type PendingOcrMarker } from "./lib/debug";
-  import { findItaijiEntries, itaijiSource } from "./lib/itaiji";
+  import { findItaijiEntries, itaijiSource, normalizeItaijiText } from "./lib/itaiji";
   import { parseViewerLocation, viewerPathFromManifestUrl } from "./lib/viewer-route";
   import {
     applyOcrResult,
@@ -46,6 +72,11 @@
   let narrowPane: "viewer" | "ocr" = $state("viewer");
   let hasLoadedManifest = false;
   const selectedCanvasStorageKey = "bokkei-selected-canvas";
+  const ocrTextSizeStorageKey = "bokkei-ocr-text-size";
+  const MIN_OCR_TEXT_SIZE = 14;
+  const MAX_OCR_TEXT_SIZE = 28;
+  const OCR_TEXT_SIZE_STEP = 1;
+  const DEFAULT_OCR_TEXT_SIZE = 18;
   const MIN_ZOOM = 40;
   const MAX_ZOOM = 200;
   const ZOOM_STEP = 10;
@@ -73,6 +104,11 @@
   let fullOcrError = $state<unknown>(null);
   let ocrAbortController = $state<AbortController | null>(null);
   let ocrTextExpanded = $state(false);
+  let ocrResultFontSize = $state(DEFAULT_OCR_TEXT_SIZE);
+  let ocrProfile: OcrProfile = $state("balanced");
+  let benchmarkGroundTruthText = $state("");
+  let benchmarkGroundTruthError = $state("");
+  let benchmarkMetrics = $state<OcrPageMetrics | null>(null);
 
   let page = $derived(manifest.pages[pageIndex]);
   const viewerDebug = createViewerDebug(() => ({
@@ -82,7 +118,12 @@
   }));
   let average = $derived(
     page.result.length
-      ? Math.round(page.result.reduce((sum, line) => sum + line.confidence, 0) / page.result.length)
+      ? Math.round(page.result.reduce((sum, line) => sum + (line.recognitionScore ?? line.detectionScore), 0) / page.result.length * 100)
+      : 0,
+  );
+  let detectionAverage = $derived(
+    page.result.length
+      ? Math.round(page.result.reduce((sum, line) => sum + line.detectionScore, 0) / page.result.length * 100)
       : 0,
   );
   let ocrRegions = $derived(
@@ -107,6 +148,41 @@
         ? t(locale, "allList")
         : t(locale, "selectedOcrLine"),
   );
+  let ocrTextStyle = $derived(
+    `--ocr-font-size:${ocrResultFontSize}px;--ocr-column-width:${Math.min(78, Math.max(46, Math.round(ocrResultFontSize * 2.6)))}px`,
+  );
+
+  function scorePercent(score: number | undefined): string {
+    return score === undefined ? "—" : `${Math.round(Math.max(0, Math.min(1, score)) * 100)}%`;
+  }
+
+  function lineIsLowConfidence(line: typeof page.result[number]): boolean {
+    return line.recognitionScore === undefined
+      || line.recognitionScore < recognitionRetryThresholdForProfile(ocrProfile)
+      || line.minimumTokenScore !== undefined && line.minimumTokenScore < 0.28
+      || line.meanTokenMargin !== undefined && line.meanTokenMargin < 0.35
+      || line.endedWithEos === false
+      || line.uncertain === true;
+  }
+
+  function lineScoreSummary(line: typeof page.result[number]): string {
+    return t(locale, "lineScores", {
+      recognition: scorePercent(line.recognitionScore),
+      detection: scorePercent(line.detectionScore),
+    });
+  }
+
+  function activeOcrOptions(): NdlOcrOptions {
+    return {
+      ...DEFAULT_NDL_OCR_OPTIONS,
+      profile: ocrProfile,
+      enableHighResolutionRetry: ocrProfile !== "fast",
+      enableAdaptiveTiling: ocrProfile === "accurate",
+      enableDeskewRetry: ocrProfile === "accurate",
+      enableLongLineSegmentation: ocrProfile === "accurate",
+      maxExtraRecognitions: ocrProfile === "fast" ? 0 : ocrProfile === "accurate" ? 6 : 2,
+    };
+  }
 
   function setLocale(nextLocale: Locale) {
     locale = nextLocale;
@@ -118,8 +194,41 @@
     updateDocumentMetadata(nextLocale);
   }
 
+  function normalizeOcrTextSize(value: number): number {
+    if (!Number.isFinite(value)) return DEFAULT_OCR_TEXT_SIZE;
+    return Math.min(MAX_OCR_TEXT_SIZE, Math.max(MIN_OCR_TEXT_SIZE, Math.round(value)));
+  }
+
+  function setOcrResultFontSize(value: number): void {
+    ocrResultFontSize = normalizeOcrTextSize(value);
+    try {
+      window.localStorage.setItem(ocrTextSizeStorageKey, String(ocrResultFontSize));
+    } catch {
+      // Text-size preferences are optional when storage is unavailable.
+    }
+  }
+
+  function adjustOcrResultFontSize(delta: number): void {
+    setOcrResultFontSize(ocrResultFontSize + delta);
+  }
+
+  function restoreOcrResultFontSize(): void {
+    try {
+      const stored = Number(window.localStorage.getItem(ocrTextSizeStorageKey));
+      if (Number.isFinite(stored)) ocrResultFontSize = normalizeOcrTextSize(stored);
+    } catch {
+      // Use the default size when persisted preferences cannot be read.
+    }
+  }
+
   function pageLabelFor(item: ViewerPage): string {
     return localizedText(item.labelTranslations, locale) || item.label;
+  }
+
+  function thumbnailAspectRatio(item: ViewerPage): string | undefined {
+    return item.width > 0 && item.height > 0
+      ? `${item.width} / ${item.height}`
+      : undefined;
   }
 
   function presetDetail(index: number): string {
@@ -143,6 +252,12 @@
     cropStart = null;
     metomPredictions = [];
     metomError = null;
+  }
+
+  function resetBenchmarkState() {
+    benchmarkGroundTruthText = "";
+    benchmarkGroundTruthError = "";
+    benchmarkMetrics = null;
   }
 
   function cancelFullOcr() {
@@ -233,6 +348,7 @@
 
   function selectPage(index: number) {
     resetFullOcrState();
+    resetBenchmarkState();
     setSelectedPage(index);
     selectedLine = 0;
     overlay = false;
@@ -246,6 +362,7 @@
     const nextIndex = Math.min(manifest.pages.length - 1, Math.max(0, pageIndex + delta));
     if (nextIndex === pageIndex) return;
     resetFullOcrState();
+    resetBenchmarkState();
     setSelectedPage(nextIndex);
     selectedLine = 0;
     overlay = false;
@@ -275,6 +392,7 @@
 
   function restoreCanvas(canvasNumber?: number): void {
     resetFullOcrState();
+    resetBenchmarkState();
     setSelectedPage(resolveInitialPageIndex({
       pages: manifest.pages,
       routeCanvasNumber: canvasNumber,
@@ -361,6 +479,7 @@
       hasLoadedManifest = true;
       if (selectedCanvasId) storeCanvasId(nextManifest.url, selectedCanvasId);
       selectedLine = 0;
+      resetBenchmarkState();
       query = "";
       overlay = false;
       variantBrowseAll = false;
@@ -393,6 +512,7 @@
   }
 
   onMount(() => {
+    restoreOcrResultFontSize();
     try {
       const storedLocale = window.localStorage.getItem("bokkei-locale");
       if (isLocale(storedLocale)) locale = storedLocale;
@@ -533,6 +653,7 @@
     const targetPage = page;
     const targetManifestUrl = manifest.url;
     const targetCanvasId = targetPage.canvasId;
+    const ocrOptions = activeOcrOptions();
     const startedAt = Date.now();
     const controller = new AbortController();
     let pendingOcr: PendingOcrMarker | null = null;
@@ -550,10 +671,67 @@
       startedAt,
     });
     viewerDebug.log("ocr-start", { canvasId: targetCanvasId });
+    const cacheKey = buildOcrCacheKeyForPage(
+      targetPage,
+      targetManifestUrl,
+      NDL_MODEL_REVISION,
+      OCR_PIPELINE_VERSION,
+      ocrOptions,
+    );
 
     try {
+      const applyResult = (result: NdlOcrResult, source: "cache" | "model"): boolean => {
+        if (controller.signal.aborted) {
+          viewerDebug.log("ocr-cancelled", { canvasId: targetCanvasId, reason: "aborted" });
+          return false;
+        }
+        const applied = applyOcrResult({
+          manifest,
+          targetManifestUrl,
+          targetCanvasId,
+          result,
+        });
+        if (!applied.applied) {
+          viewerDebug.log("ocr-cancelled", {
+            canvasId: targetCanvasId,
+            reason: manifest.url === targetManifestUrl ? "canvas-not-found" : "manifest-changed",
+          });
+          return false;
+        }
+
+        if (manifest.pages[pageIndex]?.canvasId === targetCanvasId) {
+          selectedLine = 0;
+          overlay = true;
+          variantBrowseAll = false;
+          variantVisibleLimit = 120;
+          scrollToOcrLine(0);
+        }
+        viewerDebug.log("ocr-success", {
+          canvasId: targetCanvasId,
+          lineCount: result.lines.length,
+          appliedPageIndex: applied.pageIndex,
+          source,
+        });
+        return true;
+      };
+
+      const cached = await readOcrCache(cacheKey);
+      if (cached) {
+        fullOcrProgress = {
+          stage: "done",
+          percent: 100,
+          messageKey: "progressDone",
+          params: { count: cached.lines.length },
+          completed: cached.lines.length,
+          total: cached.lines.length,
+        };
+        applyResult(resultFromOcrCache(cached), "cache");
+        return;
+      }
+
       const result = await recognizePageWithNdlLite(
-        buildNdlOcrImageUrl(targetPage),
+        targetPage,
+        ocrOptions,
         (progress) => {
           if (ocrAbortController === controller) {
             fullOcrProgress = progress;
@@ -573,32 +751,8 @@
         return;
       }
 
-      const applied = applyOcrResult({
-        manifest,
-        targetManifestUrl,
-        targetCanvasId,
-        result,
-      });
-      if (!applied.applied) {
-        viewerDebug.log("ocr-cancelled", {
-          canvasId: targetCanvasId,
-          reason: manifest.url === targetManifestUrl ? "canvas-not-found" : "manifest-changed",
-        });
-        return;
-      }
-
-      if (manifest.pages[pageIndex]?.canvasId === targetCanvasId) {
-        selectedLine = 0;
-        overlay = true;
-        variantBrowseAll = false;
-        variantVisibleLimit = 120;
-        scrollToOcrLine(0);
-      }
-      viewerDebug.log("ocr-success", {
-        canvasId: targetCanvasId,
-        lineCount: result.lines.length,
-        appliedPageIndex: applied.pageIndex,
-      });
+      if (!applyResult(result, "model")) return;
+      await writeOcrCache(cacheEntryFromResult(cacheKey, targetPage, targetManifestUrl, result));
     } catch (error) {
       const isCurrentOcr = ocrAbortController === controller;
       if (isCurrentOcr) fullOcrError = error instanceof Error && error.name === "AbortError"
@@ -622,9 +776,144 @@
       }
     }
   }
+
+  async function clearCurrentOcrCache() {
+    const cacheKey = buildOcrCacheKeyForPage(
+      page,
+      manifest.url,
+      NDL_MODEL_REVISION,
+      OCR_PIPELINE_VERSION,
+      activeOcrOptions(),
+    );
+    await deleteOcrCache(cacheKey);
+    viewerDebug.log("ocr-cache-cleared", { canvasId: page.canvasId });
+  }
+
+  function exportBenchmark(format: "json" | "csv" | "baseline") {
+    if (!page.result.length) return;
+    let groundTruth;
+    if (benchmarkGroundTruthText.trim()) {
+      try {
+        groundTruth = parseOcrGroundTruthJson(benchmarkGroundTruthText);
+        benchmarkGroundTruthError = "";
+      } catch (error) {
+        benchmarkGroundTruthError = error instanceof Error ? error.message : String(error);
+        return;
+      }
+    }
+    const record = createOcrBenchmarkRecord({
+      page,
+      manifestUrl: manifest.url,
+      modelRevision: page.ocrModelRevision,
+      provider: page.ocrProvider,
+      profile: page.ocrProfile,
+      ocrOptions: page.ocrOptions,
+      groundTruth,
+      normalizedText: normalizeItaijiText,
+    });
+    const suffix = `${manifest.recordId}-${pageIndex + 1}`;
+    if (format === "baseline") {
+      const baseline = createOcrBenchmarkBaseline([record]);
+      downloadBenchmarkFile(`ocr-baseline-${suffix}.json`, serializeOcrBenchmarkBaselineJson(baseline), "application/json");
+    } else if (format === "json") {
+      downloadBenchmarkFile(`ocr-benchmark-${suffix}.json`, serializeBenchmarkJson(record), "application/json");
+    } else {
+      downloadBenchmarkFile(`ocr-benchmark-${suffix}.csv`, serializeBenchmarkCsv(record), "text/csv;charset=utf-8");
+    }
+    viewerDebug.log("ocr-benchmark-export", { format, canvasId: page.canvasId });
+  }
+
+  function evaluateBenchmark() {
+    benchmarkGroundTruthError = "";
+    benchmarkMetrics = null;
+    if (!benchmarkGroundTruthText.trim()) {
+      benchmarkGroundTruthError = t(locale, "benchmarkGroundTruthRequired");
+      return;
+    }
+    try {
+      const groundTruth = parseOcrGroundTruthJson(benchmarkGroundTruthText);
+      const record = createOcrBenchmarkRecord({
+        page,
+        manifestUrl: manifest.url,
+        modelRevision: page.ocrModelRevision,
+        provider: page.ocrProvider,
+        profile: page.ocrProfile,
+        ocrOptions: page.ocrOptions,
+        groundTruth,
+        normalizedText: normalizeItaijiText,
+      });
+      benchmarkMetrics = record.metrics ?? null;
+      viewerDebug.log("ocr-benchmark-evaluated", {
+        canvasId: page.canvasId,
+        cer: benchmarkMetrics?.raw.cer,
+        detectionF1: benchmarkMetrics?.detection.f1,
+      });
+    } catch (error) {
+      benchmarkGroundTruthError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function metricPercent(value: number): string {
+    return `${(value * 100).toFixed(1)}%`;
+  }
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} onpopstate={handlePopState} />
+
+{#snippet ocrFontSizeControl(inputId: string)}
+  <div class="ocr-font-size-control" role="group" aria-label={t(locale, "ocrTextSize")}>
+    <span class="ocr-font-size-label" aria-hidden="true">A</span>
+    <button
+      type="button"
+      onclick={() => adjustOcrResultFontSize(-OCR_TEXT_SIZE_STEP)}
+      disabled={ocrResultFontSize <= MIN_OCR_TEXT_SIZE}
+      aria-label={t(locale, "ocrTextSizeDecrease")}
+    >−</button>
+    <input
+      id={inputId}
+      name="ocr-text-size"
+      type="range"
+      min={MIN_OCR_TEXT_SIZE}
+      max={MAX_OCR_TEXT_SIZE}
+      step={OCR_TEXT_SIZE_STEP}
+      value={ocrResultFontSize}
+      aria-label={t(locale, "ocrTextSize")}
+      aria-valuetext={t(locale, "ocrTextSizeValue", { size: ocrResultFontSize })}
+      oninput={(event) => setOcrResultFontSize(Number((event.currentTarget as HTMLInputElement).value))}
+    />
+    <button
+      type="button"
+      onclick={() => adjustOcrResultFontSize(OCR_TEXT_SIZE_STEP)}
+      disabled={ocrResultFontSize >= MAX_OCR_TEXT_SIZE}
+      aria-label={t(locale, "ocrTextSizeIncrease")}
+    >＋</button>
+    <output for={inputId}>{ocrResultFontSize}px</output>
+  </div>
+{/snippet}
+
+{#snippet ocrResultList()}
+  {#if page.result.length}
+    {#each page.result as line, index (`${line.text}-${index}`)}
+      {@const scoreSummary = lineScoreSummary(line)}
+      {@const lowConfidence = lineIsLowConfidence(line)}
+      <button
+        type="button"
+        class:active={selectedLine === index}
+        class:match={Boolean(query && line.text.includes(query))}
+        data-line-index={index}
+        onclick={() => selectOcrLine(index)}
+      >
+        <span>{line.text || t(locale, "unreadable")}</span>
+        <small class:low={lowConfidence} title={scoreSummary} aria-label={scoreSummary}>
+          <span>{t(locale, "recognitionShort")} {scorePercent(line.recognitionScore)}</span>
+          <span>{t(locale, "detectionShort")} {scorePercent(line.detectionScore)}</span>
+        </small>
+      </button>
+    {/each}
+  {:else}
+    <div class="ocr-empty"><strong>{t(locale, "ocrNotRun")}</strong><span>{t(locale, "runOcrInstruction")}</span></div>
+  {/if}
+{/snippet}
 
 <main class="app-shell">
   <header class="topbar">
@@ -653,7 +942,7 @@
     <aside class="page-rail" aria-label={t(locale, "pageList")}>
       <div class="rail-count">{String(pageIndex + 1).padStart(2, "0")} / {String(manifest.pages.length).padStart(2, "0")}</div>
       {#each manifest.pages as item, index (`${item.canvasId}-${index}`)}
-        <button type="button" data-page-index={index} class:active={pageIndex === index} class="thumb" onclick={() => selectPage(index)} aria-label={t(locale, "pageNumber", { number: index + 1, label: pageLabelFor(item) })}>
+        <button type="button" data-page-index={index} class:active={pageIndex === index} class="thumb" style:--thumb-aspect-ratio={thumbnailAspectRatio(item)} onclick={() => selectPage(index)} aria-label={t(locale, "pageNumber", { number: index + 1, label: pageLabelFor(item) })}>
           <img src={item.thumbnail} alt="" loading="lazy" decoding="async" />
           <span>{index + 1}</span>
         </button>
@@ -692,6 +981,14 @@
           <span></span>{ocrRegions.length ? t(locale, "ocrRegions", { count: ocrRegions.length }) : t(locale, "noOcrCoordinates")}
         </label>
         <button type="button" class:active={metomMode} class="crop-mode-button" onclick={openMetomPanel}>{t(locale, "selectCharacter")}</button>
+        <label class="ocr-profile-control" for="ocr-profile">
+          <span>{t(locale, "ocrProfile")}</span>
+          <select id="ocr-profile" bind:value={ocrProfile} disabled={fullOcrRunning}>
+            <option value="fast">{t(locale, "ocrProfileFast")}</option>
+            <option value="balanced">{t(locale, "ocrProfileBalanced")}</option>
+            <option value="accurate">{t(locale, "ocrProfileAccurate")}</option>
+          </select>
+        </label>
         <section class:running={fullOcrRunning} class="toolbar-ocr-action" aria-label={t(locale, "autoOcr")}>
           {#if fullOcrRunning}
             <button
@@ -771,7 +1068,10 @@
     <aside class="text-panel">
       <div class="panel-head">
         <div><span class="eyebrow">{t(locale, "recognitionResult")}</span><h1>{t(locale, "ocrHeading")}</h1></div>
-        <div class="confidence-ring" style={`--score: ${average * 3.6}deg`}><strong>{average}</strong><small>%</small></div>
+        <div class="score-summary">
+          <div class="confidence-ring" title={t(locale, "recognitionScore")} style={`--score: ${average * 3.6}deg`}><strong>{average}</strong><small>%</small></div>
+          <small>{t(locale, "detectionScore")} {detectionAverage}%</small>
+        </div>
       </div>
 
       <label class="search-field" for="recognition-search"><span>⌕</span><input id="recognition-search" name="query" type="search" placeholder={panelTab === "variants" ? t(locale, "searchVariants") : t(locale, "searchRecognition")} bind:value={query} /><kbd>⌘ K</kbd></label>
@@ -786,8 +1086,9 @@
 
       {#if panelTab === "text"}
         <div class="transcription" aria-label={t(locale, "transcriptionResult")}>
-          <div class="reading-order">{t(locale, "readingOrder")} <span>{ocrRegions.length ? t(locale, "canvasCoordinates") : t(locale, "noCoordinateData")}</span></div>
-          <div class="vertical-text">
+          <div class="reading-order"><span>{t(locale, "readingOrder")}</span><span>{ocrRegions.length ? t(locale, "canvasCoordinates") : t(locale, "noCoordinateData")}</span></div>
+          {@render ocrFontSizeControl("ocr-font-size")}
+          <div class="vertical-text" style={ocrTextStyle} aria-hidden={ocrTextExpanded ? "true" : undefined}>
             {#if page.result.length}
               <button
                 type="button"
@@ -799,23 +1100,33 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" /></svg>
               </button>
             {/if}
-            {#if page.result.length}
-              {#each page.result as line, index (`${line.text}-${index}`)}
-                <button
-                  type="button"
-                  class:active={selectedLine === index}
-                  class:match={Boolean(query && line.text.includes(query))}
-                  data-line-index={index}
-                  onclick={() => selectOcrLine(index)}
-                >
-                  <span>{line.text || t(locale, "unreadable")}</span><small class:low={line.confidence < 75}>{line.confidence}%</small>
-                </button>
-              {/each}
-            {:else}
-              <div class="ocr-empty"><strong>{t(locale, "ocrNotRun")}</strong><span>{t(locale, "runOcrInstruction")}</span></div>
-            {/if}
+            {#if !ocrTextExpanded}{@render ocrResultList()}{/if}
           </div>
           <p class="demo-note">{page.ocrEngine ? t(locale, "ocrConfidenceNote", { engine: page.ocrEngine, provider: page.ocrProvider ?? "" }) : t(locale, "ocrDeviceDescription")}</p>
+          {#if page.result.length && viewerDebug.enabled}
+            <div class="benchmark-export" aria-label={t(locale, "benchmarkExport")}>
+              <span>{t(locale, "benchmarkExport")}</span>
+              <button type="button" onclick={() => exportBenchmark("json")}>{t(locale, "exportJson")}</button>
+              <button type="button" onclick={() => exportBenchmark("csv")}>{t(locale, "exportCsv")}</button>
+              <button type="button" onclick={() => exportBenchmark("baseline")}>{t(locale, "exportBaseline")}</button>
+              <button type="button" onclick={() => void clearCurrentOcrCache()}>{t(locale, "clearOcrCache")}</button>
+            </div>
+            <label class="benchmark-ground-truth" for="benchmark-ground-truth">{t(locale, "benchmarkGroundTruth")}
+              <textarea id="benchmark-ground-truth" bind:value={benchmarkGroundTruthText} rows="3" spellcheck="false" placeholder="Paste ground-truth JSON"></textarea>
+              <button type="button" onclick={evaluateBenchmark}>{t(locale, "benchmarkEvaluate")}</button>
+            </label>
+            {#if benchmarkGroundTruthError}<div class="benchmark-error" role="alert">{benchmarkGroundTruthError}</div>{/if}
+            {#if benchmarkMetrics}
+              <div class="benchmark-metrics" aria-label={t(locale, "benchmarkMetrics")}>
+                <span>{t(locale, "benchmarkMetrics")}</span>
+                <b>{t(locale, "benchmarkCer")} {metricPercent(benchmarkMetrics.raw.cer)}</b>
+                {#if benchmarkMetrics.normalized}<b>{t(locale, "benchmarkNormalizedCer")} {metricPercent(benchmarkMetrics.normalized.cer)}</b>{/if}
+                <b>{t(locale, "benchmarkExact")} {metricPercent(benchmarkMetrics.raw.exactLineRate)}</b>
+                <b>{t(locale, "benchmarkRecall")} {metricPercent(benchmarkMetrics.detection.recall)}</b>
+                <b>{t(locale, "benchmarkF1")} {metricPercent(benchmarkMetrics.detection.f1)}</b>
+              </div>
+            {/if}
+          {/if}
         </div>
       {:else if panelTab === "variants"}
         <section class="variant-list" aria-label={t(locale, "variantPanel")}>
@@ -927,24 +1238,9 @@
           <button class="ocr-text-close-button" type="button" onclick={closeOcrTextExpanded} aria-label={t(locale, "close")}>×</button>
         </header>
         <div class="ocr-text-dialog-body">
-          <div class="reading-order">{t(locale, "readingOrder")} <span>{ocrRegions.length ? t(locale, "canvasCoordinates") : t(locale, "noCoordinateData")}</span></div>
-          <div class="vertical-text expanded">
-            {#if page.result.length}
-              {#each page.result as line, index (`expanded-${line.text}-${index}`)}
-                <button
-                  type="button"
-                  class:active={selectedLine === index}
-                  class:match={Boolean(query && line.text.includes(query))}
-                  data-line-index={index}
-                  onclick={() => selectOcrLine(index)}
-                >
-                  <span>{line.text || t(locale, "unreadable")}</span><small class:low={line.confidence < 75}>{line.confidence}%</small>
-                </button>
-              {/each}
-            {:else}
-              <div class="ocr-empty"><strong>{t(locale, "ocrNotRun")}</strong><span>{t(locale, "runOcrInstruction")}</span></div>
-            {/if}
-          </div>
+          <div class="reading-order"><span>{t(locale, "readingOrder")}</span><span>{ocrRegions.length ? t(locale, "canvasCoordinates") : t(locale, "noCoordinateData")}</span></div>
+          {@render ocrFontSizeControl("ocr-font-size-expanded")}
+          <div class="vertical-text expanded" style={ocrTextStyle}>{@render ocrResultList()}</div>
         </div>
       </section>
     </div>

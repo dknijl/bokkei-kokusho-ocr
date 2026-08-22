@@ -69,6 +69,13 @@ export function applyOcrResult(options: {
   }));
   targetPage.ocrEngine = `NDL古典籍OCR-Lite · ${result.revision.slice(0, 8)}`;
   targetPage.ocrProvider = result.provider;
+  targetPage.ocrModelRevision = result.revision;
+  targetPage.ocrPipelineVersion = result.pipelineVersion;
+  targetPage.ocrImageWidth = result.imageWidth;
+  targetPage.ocrImageHeight = result.imageHeight;
+  targetPage.ocrProfile = result.profile;
+  targetPage.ocrOptions = result.options;
+  targetPage.ocrStats = result.stats;
   manifest.status = "ocrComplete";
 
   return { applied: true, pageIndex };

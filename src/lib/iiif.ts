@@ -1,17 +1,17 @@
 import { LocalizedError, type Locale, type ManifestStatus } from "./i18n";
+import type { OcrLine, OcrRegion, OcrRunStats } from "./ocr/types.ts";
+import type { NdlOcrOptions } from "./ocr/profiles.ts";
 
-export type OcrRegion = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
-
-export type OcrLine = {
-  text: string;
-  confidence: number;
-  region?: OcrRegion;
-};
+export type {
+  CropPadding,
+  OcrAlternative,
+  OcrLine,
+  OcrRegion,
+  OcrRunStats,
+  OcrSelectionReason,
+  RecognitionOrientation,
+  RecognitionPreprocessing,
+} from "./ocr/types.ts";
 
 export type ViewerPage = {
   canvasId: string;
@@ -25,6 +25,13 @@ export type ViewerPage = {
   result: OcrLine[];
   ocrEngine?: string;
   ocrProvider?: string;
+  ocrModelRevision?: string;
+  ocrPipelineVersion?: string;
+  ocrImageWidth?: number;
+  ocrImageHeight?: number;
+  ocrProfile?: NdlOcrOptions["profile"];
+  ocrOptions?: NdlOcrOptions;
+  ocrStats?: OcrRunStats;
 };
 
 export type ViewerManifest = {

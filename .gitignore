@@ -5,6 +5,7 @@ AGENT.md
 CLAUDE.md
 CODEX.md
 .opencode
+opencode.json
 
 # dependencies
 /node_modules
