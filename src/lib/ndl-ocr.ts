@@ -42,9 +42,14 @@ import {
   restoreTileRegion,
 } from "./ocr/tiling.ts";
 import type { OcrRunStats, RecognitionOrientation } from "./ocr/types.ts";
+import {
+  readOcrModelAsset,
+  requestOcrModelStoragePersistence,
+  writeOcrModelAsset,
+} from "./ocr/model-cache.ts";
 
-export const NDL_MODEL_REVISION = "ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8";
-const MODEL_ROOT = `https://raw.githubusercontent.com/ndl-lab/ndlkotenocr-lite/${NDL_MODEL_REVISION}`;
+export const NDL_MODEL_REF = "master";
+const MODEL_ROOT = `https://raw.githubusercontent.com/ndl-lab/ndlkotenocr-lite/${NDL_MODEL_REF}`;
 const DETECTOR_URL = `${MODEL_ROOT}/src/model/rtmdet-s-1280x1280.onnx`;
 const RECOGNIZER_URL = `${MODEL_ROOT}/src/model/parseq-ndl-32x384-tiny-10.onnx`;
 const CHARSET_URL = `${MODEL_ROOT}/src/config/NDLmoji.yaml`;
@@ -54,6 +59,7 @@ const DETECTOR_SIZE = 1024;
 const RECOGNIZER_WIDTH = 384;
 const RECOGNIZER_HEIGHT = 32;
 const OCR_UI_YIELD_INTERVAL = 4;
+const MODEL_CACHE_KEY_PREFIX = `ndl-ocr:${NDL_MODEL_REF}:`;
 
 export type NdlOcrStage = "image" | "models" | "detect" | "recognize" | "retry" | "done";
 export type NdlOcrProgressKey = "progressStarting" | "progressImage" | "progressModels" | "progressDetect" | "progressRecognize" | "progressRetry" | "progressDone";
@@ -109,10 +115,12 @@ async function createSession(
   signal?: AbortSignal,
 ): Promise<ort.InferenceSession> {
   throwIfAborted(signal);
+  const model = await loadCachedAsset(url, signal);
+  throwIfAborted(signal);
   // Do not initialize WASM alongside WebGPU. The WASM backend probes
   // SharedArrayBuffer even when it is only a fallback provider.
   const executionProviders = useWebGpu ? ["webgpu"] : ["wasm"];
-  const session = await ort.InferenceSession.create(url, {
+  const session = await ort.InferenceSession.create(model, {
     executionProviders,
     graphOptimizationLevel: "all",
   });
@@ -125,6 +133,7 @@ async function createSession(
 
 async function loadModels(signal?: AbortSignal): Promise<LoadedModels> {
   const webGpuAvailable = typeof navigator !== "undefined" && "gpu" in navigator;
+  requestOcrModelStoragePersistence();
 
   const createBoth = async (useWebGpu: boolean) => {
     let detector: ort.InferenceSession | undefined;
@@ -133,7 +142,7 @@ async function loadModels(signal?: AbortSignal): Promise<LoadedModels> {
       const results = await Promise.allSettled([
         createSession(DETECTOR_URL, useWebGpu, signal),
         createSession(RECOGNIZER_URL, useWebGpu, signal),
-        fetch(CHARSET_URL, { signal, mode: "cors", cache: "force-cache" }),
+        loadCachedAsset(CHARSET_URL, signal, (status) => new LocalizedError("errorCharsetHttp", { status })),
       ]);
       const detectorResult = results[0];
       const recognizerResult = results[1];
@@ -146,11 +155,8 @@ async function loadModels(signal?: AbortSignal): Promise<LoadedModels> {
         throw new Error("NDL OCR model loading returned no sessions.");
       }
       throwIfAborted(signal);
-      if (!charsetResult.value.ok) {
-        throw new LocalizedError("errorCharsetHttp", { status: charsetResult.value.status });
-      }
 
-      const yaml = await charsetResult.value.text();
+      const yaml = new TextDecoder().decode(charsetResult.value);
       throwIfAborted(signal);
       const match = yaml.match(/charset_train:\s*("(?:\\.|[^"\\])*")/);
       if (!match) throw new LocalizedError("errorCharsetFormat");
@@ -181,6 +187,32 @@ async function loadModels(signal?: AbortSignal): Promise<LoadedModels> {
   }
 
   return createBoth(false);
+}
+
+async function loadCachedAsset(
+  url: string,
+  signal?: AbortSignal,
+  createHttpError: (status: number) => Error = (status) => new Error(`OCR model fetch failed with HTTP ${status}.`),
+): Promise<Uint8Array> {
+  throwIfAborted(signal);
+  const key = `${MODEL_CACHE_KEY_PREFIX}${url}`;
+  const cached = await readOcrModelAsset(key);
+  if (cached) return new Uint8Array(cached);
+
+  let response: Response;
+  try {
+    response = await fetch(url, { signal, mode: "cors", cache: "no-cache" });
+  } catch (error) {
+    if (signal?.aborted) throw new DOMException("ocrCancelled", "AbortError");
+    throw error;
+  }
+  if (!response.ok) throw createHttpError(response.status);
+
+  const data = await response.arrayBuffer();
+  throwIfAborted(signal);
+  await writeOcrModelAsset(key, data);
+  throwIfAborted(signal);
+  return new Uint8Array(data);
 }
 
 async function getModels(signal?: AbortSignal): Promise<LoadedModels> {
@@ -1111,7 +1143,7 @@ export async function recognizePageWithNdlLite(
         imageHeight,
         lines: orderedLines,
         provider: models.provider,
-        revision: NDL_MODEL_REVISION,
+        revision: NDL_MODEL_REF,
         pipelineVersion: OCR_PIPELINE_VERSION,
         profile: normalizedOptions.profile,
         options: normalizedOptions,

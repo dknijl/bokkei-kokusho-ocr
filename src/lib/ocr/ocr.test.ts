@@ -14,7 +14,7 @@ import { levenshteinDistance } from "./edit-distance.ts";
 import { buildLineCropUrl, expandCropRegion, floorCeilCropRegion } from "./image.ts";
 import { evaluateOcrPage } from "./metrics.ts";
 import { globalNms, mergeAdjacentDetections } from "./nms.ts";
-import { buildOcrCacheKey } from "./cache.ts";
+import { isOcrModelCacheFresh, OCR_MODEL_CACHE_MAX_AGE_MS } from "./model-cache.ts";
 import {
   combineSegmentRecognitions,
   createLineWindows,
@@ -273,47 +273,12 @@ test("reading order separates adjacent columns whose boxes overlap", () => {
   assert.deepEqual(order, [0, 1]);
 });
 
-test("OCR cache keys are stable across option property order", () => {
-  const first = buildOcrCacheKey({
-    modelRevision: "model",
-    pipelineVersion: "pipeline",
-    manifestUrl: "https://example.test/manifest",
-    canvasId: "canvas-1",
-    imageServiceId: "https://example.test/iiif",
-    profile: "balanced",
-    options: {
-      profile: "balanced",
-      paperFilter: "off",
-      enableHighResolutionRetry: true,
-      enableAdaptiveTiling: false,
-      enableDeskewRetry: false,
-      enableLongLineSegmentation: false,
-      maxExtraRecognitions: 2,
-      writingMode: "auto",
-      scattered: false,
-    },
-  });
-  const second = buildOcrCacheKey({
-    modelRevision: "model",
-    pipelineVersion: "pipeline",
-    manifestUrl: "https://example.test/manifest",
-    canvasId: "canvas-1",
-    imageServiceId: "https://example.test/iiif",
-    profile: "balanced",
-    options: {
-      maxExtraRecognitions: 2,
-      enableLongLineSegmentation: false,
-      enableDeskewRetry: false,
-      enableAdaptiveTiling: false,
-      enableHighResolutionRetry: true,
-      paperFilter: "off",
-      profile: "balanced",
-      writingMode: "auto",
-      scattered: false,
-    },
-  },
-  );
-  assert.equal(first, second);
+test("OCR model cache expires after seven days", () => {
+  const savedAt = 1000;
+  assert.equal(isOcrModelCacheFresh(savedAt, savedAt), true);
+  assert.equal(isOcrModelCacheFresh(savedAt, savedAt + OCR_MODEL_CACHE_MAX_AGE_MS), true);
+  assert.equal(isOcrModelCacheFresh(savedAt, savedAt + OCR_MODEL_CACHE_MAX_AGE_MS + 1), false);
+  assert.equal(isOcrModelCacheFresh(savedAt, savedAt - 1), false);
 });
 
 test("OCR retry work is capped for resource safety", () => {
