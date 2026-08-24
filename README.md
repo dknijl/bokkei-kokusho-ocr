@@ -11,8 +11,6 @@
 - OpenAI Sites / Cloudflare Worker 静的配信
 - IIIF Presentation API v2/v3、IIIF Image API
 
-React、Next.js、Vinext、Tailwind、Drizzle は使用していません。
-
 ## OCR連携
 
 ### NDL古典籍OCR-Lite — ページ自動OCR
