@@ -17,7 +17,6 @@
   } from "./lib/ocr";
   import {
     recognizePageWithNdlLite,
-    NDL_MODEL_REVISION,
     type NdlOcrResult,
     type NdlOcrProgress,
   } from "./lib/ndl-ocr";
@@ -31,21 +30,12 @@ import {
     createOcrBenchmarkBaseline,
     createOcrBenchmarkRecord,
     downloadBenchmarkFile,
-    OCR_PIPELINE_VERSION,
     parseOcrGroundTruthJson,
     serializeBenchmarkCsv,
     serializeBenchmarkJson,
     serializeOcrBenchmarkBaselineJson,
   } from "./lib/ocr/benchmark";
   import type { OcrPageMetrics } from "./lib/ocr/metrics";
-  import {
-    buildOcrCacheKeyForPage,
-    cacheEntryFromResult,
-    deleteOcrCache,
-    readOcrCache,
-    resultFromOcrCache,
-    writeOcrCache,
-  } from "./lib/ocr/cache";
   import { createViewerDebug, type PendingOcrMarker } from "./lib/debug";
   import { findItaijiEntries, itaijiSource, normalizeItaijiText } from "./lib/itaiji";
   import { parseViewerLocation, viewerPathFromManifestUrl } from "./lib/viewer-route";
@@ -671,16 +661,8 @@ import {
       startedAt,
     });
     viewerDebug.log("ocr-start", { canvasId: targetCanvasId });
-    const cacheKey = buildOcrCacheKeyForPage(
-      targetPage,
-      targetManifestUrl,
-      NDL_MODEL_REVISION,
-      OCR_PIPELINE_VERSION,
-      ocrOptions,
-    );
-
     try {
-      const applyResult = (result: NdlOcrResult, source: "cache" | "model"): boolean => {
+      const applyResult = (result: NdlOcrResult): boolean => {
         if (controller.signal.aborted) {
           viewerDebug.log("ocr-cancelled", { canvasId: targetCanvasId, reason: "aborted" });
           return false;
@@ -710,24 +692,10 @@ import {
           canvasId: targetCanvasId,
           lineCount: result.lines.length,
           appliedPageIndex: applied.pageIndex,
-          source,
+          source: "model",
         });
         return true;
       };
-
-      const cached = await readOcrCache(cacheKey);
-      if (cached) {
-        fullOcrProgress = {
-          stage: "done",
-          percent: 100,
-          messageKey: "progressDone",
-          params: { count: cached.lines.length },
-          completed: cached.lines.length,
-          total: cached.lines.length,
-        };
-        applyResult(resultFromOcrCache(cached), "cache");
-        return;
-      }
 
       const result = await recognizePageWithNdlLite(
         targetPage,
@@ -751,8 +719,7 @@ import {
         return;
       }
 
-      if (!applyResult(result, "model")) return;
-      await writeOcrCache(cacheEntryFromResult(cacheKey, targetPage, targetManifestUrl, result));
+      applyResult(result);
     } catch (error) {
       const isCurrentOcr = ocrAbortController === controller;
       if (isCurrentOcr) fullOcrError = error instanceof Error && error.name === "AbortError"
@@ -775,18 +742,6 @@ import {
         ocrAbortController = null;
       }
     }
-  }
-
-  async function clearCurrentOcrCache() {
-    const cacheKey = buildOcrCacheKeyForPage(
-      page,
-      manifest.url,
-      NDL_MODEL_REVISION,
-      OCR_PIPELINE_VERSION,
-      activeOcrOptions(),
-    );
-    await deleteOcrCache(cacheKey);
-    viewerDebug.log("ocr-cache-cleared", { canvasId: page.canvasId });
   }
 
   function exportBenchmark(format: "json" | "csv" | "baseline") {
@@ -1109,7 +1064,6 @@ import {
               <button type="button" onclick={() => exportBenchmark("json")}>{t(locale, "exportJson")}</button>
               <button type="button" onclick={() => exportBenchmark("csv")}>{t(locale, "exportCsv")}</button>
               <button type="button" onclick={() => exportBenchmark("baseline")}>{t(locale, "exportBaseline")}</button>
-              <button type="button" onclick={() => void clearCurrentOcrCache()}>{t(locale, "clearOcrCache")}</button>
             </div>
             <label class="benchmark-ground-truth" for="benchmark-ground-truth">{t(locale, "benchmarkGroundTruth")}
               <textarea id="benchmark-ground-truth" bind:value={benchmarkGroundTruthText} rows="3" spellcheck="false" placeholder="Paste ground-truth JSON"></textarea>
