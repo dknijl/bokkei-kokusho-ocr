@@ -2,6 +2,9 @@
 
 国文学研究資料館「国書データベース」などの IIIF Presentation API v2/v3 Manifest を読み込み、Canvas と Image Service を保ったまま古典籍画像を閲覧・OCR連携する Svelte 5 アプリです。
 
+<img width="731" alt="image" src="https://github.com/user-attachments/assets/5ab7ba83-0972-47be-b869-e53864640322" />
+
+
 ## 技術スタック
 
 - Svelte 5（runes）
