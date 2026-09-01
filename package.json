@@ -28,6 +28,6 @@
   },
   "type": "module",
   "dependencies": {
-    "onnxruntime-web": "^1.27.0"
+    "onnxruntime-web": "^1.29.0"
   }
 }
