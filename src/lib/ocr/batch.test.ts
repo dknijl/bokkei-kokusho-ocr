@@ -181,6 +181,7 @@ test("a resolved model revision remains fixed across pause and resume and reject
 test("generated ZIP extracts UTF-8 text, empty pages, errors, and all canvas records", async () => {
   const f = fixture(4);
   f.rows[0] = { ...f.rows[0], status: "done", result: result("𠮷野の山") };
+  f.rows[0].result!.lines[0].recognitionScore = 0.934;
   f.rows[1] = { ...f.rows[1], status: "no-text-detected", result: result("") };
   f.rows[2] = { ...f.rows[2], status: "failed", error: "HTTP 404" };
   const blob = await writeJobZip(f.job, new BlobWriter("application/zip"), f.store);
@@ -195,6 +196,9 @@ test("generated ZIP extracts UTF-8 text, empty pages, errors, and all canvas rec
   assert.match(texts.get("errors/00003.txt")!, /HTTP 404/);
   assert.ok(!texts.has("texts/00004.txt"));
   assert.match(texts.get("index.csv")!, /canvas\/3.*pending/);
+  const csvRows = texts.get("index.csv")!.trimEnd().split("\n");
+  assert.equal(csvRows[0], "number,label,canvasId,status,file,inThisArchive,ocrConfidencePercent");
+  assert.deepEqual(csvRows.slice(1).map(row => row.split(",").at(-1)), ['"93"', '""', '""', '""']);
   assert.deepEqual([...texts.keys()].sort(), ["errors/00003.txt", "index.csv", "texts/00001.txt", "texts/00002.txt"]);
   const exactFit = await planZipParts(f.job, f.store, { bytes: 1024, entries: 4 });
   assert.deepEqual(exactFit.map((part) => part.indices), [[0, 1, 2]]);
@@ -209,8 +213,40 @@ test("generated ZIP extracts UTF-8 text, empty pages, errors, and all canvas rec
     assert.ok(files.length <= 3);
     assert.ok(files.some(entry => entry.filename === "index.csv"));
     assert.ok(!files.some(entry => entry.filename === "run.json"));
+    const indexEntry = files.find(entry => entry.filename === "index.csv")!;
+    assert.ok(!indexEntry.directory);
+    const splitRows = (await indexEntry.getData(new TextWriter())).trimEnd().split("\n");
+    assert.equal(splitRows[0], csvRows[0]);
+    assert.deepEqual(splitRows.slice(1).map(row => row.split(",").at(-1)), ['"93"', '""', '""', '""']);
     await archive.close();
   }
+});
+
+test("ZIP confidence requires complete valid recognition scores and never substitutes detection", async () => {
+  const line = (recognitionScore?: number) => ({ text: "文字", detectionScore: 0.99, recognitionScore });
+  const cases: { status: OcrJobPage["status"]; lines: NdlOcrResult["lines"]; expected: string }[] = [
+    { status: "done", lines: [line(0.99), line(0.74)], expected: '"87"' },
+    { status: "done", lines: [line(0)], expected: '"0"' },
+    { status: "done", lines: [line(1)], expected: '"100"' },
+    { status: "done", lines: [line()], expected: '""' },
+    { status: "done", lines: [line(0.9), line()], expected: '""' },
+    ...[NaN, Infinity, -0.1, 1.1].map(score => ({ status: "done" as const, lines: [line(score)], expected: '""' })),
+    { status: "done", lines: [{ ...line(0.9), confidenceKind: "unavailable" }], expected: '""' },
+    { status: "done", lines: [], expected: '""' },
+    ...(["failed", "unsupported", "pending", "no-text-detected"] as const).map(status => ({ status, lines: [line(0.9)], expected: '""' })),
+  ];
+  const f = fixture(cases.length);
+  for (const [index, item] of cases.entries()) {
+    f.rows[index] = { ...f.rows[index], status: item.status, result: { ...result(), lines: item.lines } };
+  }
+  const blob = await writeJobZip(f.job, new BlobWriter("application/zip"), f.store);
+  assert.ok(blob instanceof Blob);
+  const reader = new ZipReader(new BlobReader(blob));
+  const indexEntry = (await reader.getEntries()).find(entry => entry.filename === "index.csv")!;
+  assert.ok(!indexEntry.directory);
+  const rows = (await indexEntry.getData(new TextWriter())).trimEnd().split("\n").slice(1);
+  await reader.close();
+  assert.deepEqual(rows.map(row => row.split(",").at(-1)), cases.map(item => item.expected));
 });
 
 test("network retry is bounded and abort is never converted to an image error", async () => {

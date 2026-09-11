@@ -100,6 +100,9 @@ test("batch retains canvas order, failed/empty pages and downloads a real ZIP", 
     "errors/00002.txt", "errors/00003.txt", "index.csv", "texts/00001.txt", "texts/00004.txt", "texts/00005.txt",
   ]);
   expect(texts.get("index.csv")).not.toContain("pending");
+  const csvRows = texts.get("index.csv")!.trimEnd().split("\n");
+  expect(csvRows[0]).toBe("number,label,canvasId,status,file,inThisArchive,ocrConfidencePercent");
+  expect(csvRows.slice(1).map(row => row.split(",").at(-1))).toEqual(['"90"', '""', '""', '"90"', '""']);
 });
 
 test("pause saves the active page, reload resumes without redoing completed canvases", async ({ page }) => {
@@ -200,7 +203,7 @@ for (const width of [1280, 390]) {
     await expect(page.locator(".batch-phase")).toHaveText("全コマのOCR完了");
     await expect(page.locator(".batch-percent")).toContainText("100%");
     await expect(page.getByRole("progressbar", { name: "全体の保存済みコマ数" })).toHaveJSProperty("value", 4);
-    await expect(page.locator(".batch-note")).not.toContainText("タブを開いたまま");
+    await expect(page.locator(".batch-note")).toHaveCount(0);
     await expect(page.locator(".batch-detail")).toContainText("ZIPでダウンロードできます");
     const contrast = await page.locator(".batch-ocr").evaluate(root => {
       const luminance = (color: string) => {
@@ -271,7 +274,7 @@ test("old pipeline results remain exportable without restoring or reusing stale 
       { ...row, status: "done", result }, cacheEntryFromResult(key, row.page, job.manifestUrl, result));
   }, manifest);
   await page.reload();
-  await expect(page.locator(".batch-status")).toContainText("以前のOCR方式");
+  await expect(page.locator(".batch-status .batch-note")).toHaveText("OCRを再度実行する場合は「全コマをOCR」を押してください。");
   await expect(page.getByRole("button", { name: "再開", exact: true })).toBeDisabled();
   await expect(page.locator(".batch-export")).toBeEnabled();
   await expect(page.locator(".vertical-text")).not.toContainText("古い結合結果");

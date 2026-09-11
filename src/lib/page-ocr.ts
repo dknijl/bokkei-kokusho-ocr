@@ -7,6 +7,7 @@ import {
 import { OCR_PIPELINE_VERSION } from "./ocr/benchmark.ts";
 import { HONKOKU_V18_MANIFEST_URL, assertHonkokuV18Configured } from "./ocr/engine/feature.ts";
 import { DEFAULT_NDL_OCR_OPTIONS, normalizeNdlOcrOptions } from "./ocr/profiles.ts";
+import { ndlModelRevision } from "./ocr/model-revision.ts";
 import type {
   PageOcrRequest,
   PageOcrResult,
@@ -31,12 +32,14 @@ export async function getPageOcrCacheIdentity(
   engineId: OcrEngineId,
   manifestUrl = HONKOKU_V18_MANIFEST_URL,
   signal?: AbortSignal,
+  detectorRevision = NDL_MODEL_REVISION,
 ): Promise<PageOcrCacheIdentity> {
+  const revision = ndlModelRevision(detectorRevision);
   if (engineId === "ndl-parseq") {
     return {
       engineId,
-      recognizerRevision: NDL_MODEL_REVISION,
-      detectorRevision: NDL_MODEL_REVISION,
+      recognizerRevision: revision,
+      detectorRevision: revision,
       pipelineVersion: OCR_PIPELINE_VERSION,
     };
   }
@@ -46,7 +49,7 @@ export async function getPageOcrCacheIdentity(
   return {
     engineId,
     recognizerRevision: HONKOKU_V18_RECOGNIZER_REVISION,
-    detectorRevision: NDL_MODEL_REVISION,
+    detectorRevision: revision,
     modelManifestDigest: digest,
     pipelineVersion: OCR_PIPELINE_VERSION,
   };
@@ -64,8 +67,8 @@ function asPageResult(result: Awaited<ReturnType<typeof recognizePageWithNdlLite
     ...result,
     engineId: "ndl-parseq",
     engineLabel: "NDL古典籍OCR-Lite",
-    detectorRevision: NDL_MODEL_REVISION,
-    recognizerRevision: NDL_MODEL_REVISION,
+    detectorRevision: result.revision,
+    recognizerRevision: result.revision,
     revision: result.revision,
   };
 }

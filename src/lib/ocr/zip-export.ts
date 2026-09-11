@@ -41,17 +41,30 @@ function csv(value: unknown): string {
   return `"${(/^[=+@\-\t\r]/.test(text) ? "'" + text : text).replaceAll('"', '""')}"`;
 }
 
+function ocrConfidencePercent(row: OcrJobPage): number | undefined {
+  const lines = row.result?.lines;
+  if (row.status !== "done" || !lines?.length) return undefined;
+  let sum = 0;
+  for (const line of lines) {
+    const score = line.recognitionScore;
+    // A page average requires recognition scores for every line; detection is a separate score.
+    if (line.confidenceKind === "unavailable" || score === undefined || !Number.isFinite(score) || score < 0 || score > 1) return undefined;
+    sum += score;
+  }
+  return Math.round(sum / lines.length * 100);
+}
+
 export async function writeJobZip(job: OcrJob, destination: WritableStream<Uint8Array> | BlobWriter, store: JobStore = indexedDbJobStore, part?: ZipPart): Promise<Blob | undefined> {
   const writer = new ZipWriter(destination, { level: 6, useWebWorkers: false });
   const include = part ? new Set(part.indices) : null;
-  const indexRows = ["number,label,canvasId,status,file,inThisArchive"];
+  const indexRows = ["number,label,canvasId,status,file,inThisArchive,ocrConfidencePercent"];
   const digits = Math.max(5, String(job.total).length);
   try {
     for (let index = 0; index < job.total; index++) {
       const row = await store.getPage(job.id, index);
       const entry = pageExport(row, digits);
       const included = Boolean(entry && (!include || include.has(index)));
-      indexRows.push([(row.page.canvasIndex ?? index) + 1, row.page.label, row.page.canvasId, row.status, entry?.name ?? "", included].map(csv).join(","));
+      indexRows.push([(row.page.canvasIndex ?? index) + 1, row.page.label, row.page.canvasId, row.status, entry?.name ?? "", included, ocrConfidencePercent(row)].map(csv).join(","));
       if (entry && included) await writer.add(entry.name, new TextReader(entry.text));
     }
     await writer.add("index.csv", new TextReader(indexRows.join("\n") + "\n"));

@@ -15,11 +15,13 @@ export type HonkokuMappedCrop = {
 };
 
 export class HonkokuCropError extends Error {
+  readonly code: "invalid-size" | "aspect-ratio";
   constructor(
-    readonly code: "invalid-size" | "aspect-ratio",
+    code: "invalid-size" | "aspect-ratio",
     message: string,
   ) {
     super(message);
+    this.code = code;
     this.name = "HonkokuCropError";
   }
 }

@@ -81,17 +81,24 @@ export type NdlOcrResult = {
   stats: OcrRunStats;
 };
 
+/** Detection boxes and dimensions are in original image pixels; no canvas is retained. */
+export type DetectedPage = Pick<NdlOcrResult, "imageWidth" | "imageHeight" | "provider" | "options" | "stats"> & {
+  detections: Detection[];
+  detectorRevision: string;
+};
+
 type ProgressCallback = (progress: NdlOcrProgress) => void;
 type LoadedModels = {
   revision: string;
   detector: ort.InferenceSession;
-  recognizer: ort.InferenceSession;
+  recognizer?: ort.InferenceSession;
   charset: string[];
   provider: NdlOcrResult["provider"];
 };
 
 let modelPromise: Promise<LoadedModels> | null = null;
 let loadedRevision: string | null = null;
+let loadedRecognition = false;
 let releaseTimer: ReturnType<typeof setTimeout> | null = null;
 let activeOcrRuns = 0;
 let releasePromise: Promise<void> | null = null;
@@ -127,7 +134,7 @@ async function createSession(
   return session;
 }
 
-async function loadModels(revision: string, signal?: AbortSignal): Promise<LoadedModels> {
+async function loadModels(revision: string, recognition: boolean, signal?: AbortSignal): Promise<LoadedModels> {
   const root = `https://raw.githubusercontent.com/ndl-lab/ndlkotenocr-lite/${revision}`;
   const webGpuAvailable = typeof navigator !== "undefined" && Boolean(navigator.gpu?.requestAdapter);
   requestOcrModelStoragePersistence();
@@ -136,15 +143,19 @@ async function loadModels(revision: string, signal?: AbortSignal): Promise<Loade
     let detector: ort.InferenceSession | undefined;
     let recognizer: ort.InferenceSession | undefined;
     try {
-      const charsetBytes = await loadCachedAsset(`${root}/src/config/NDLmoji.yaml`, signal, (status) => new LocalizedError("errorCharsetHttp", { status }));
+      const charsetBytes = recognition
+        ? await loadCachedAsset(`${root}/src/config/NDLmoji.yaml`, signal, (status) => new LocalizedError("errorCharsetHttp", { status }))
+        : null;
       // ORT WebGPU session initialization must remain sequential.
       detector = await createSession(`${root}/src/model/rtmdet-s-1280x1280.onnx`, useWebGpu, signal);
-      recognizer = await createSession(`${root}/src/model/parseq-ndl-32x384-tiny-10.onnx`, useWebGpu, signal);
+      if (recognition) recognizer = await createSession(`${root}/src/model/parseq-ndl-32x384-tiny-10.onnx`, useWebGpu, signal);
       throwIfAborted(signal);
-      const yaml = new TextDecoder().decode(charsetBytes);
-      const match = yaml.match(/charset_train:\s*("(?:\\.|[^"\\])*")/);
-      if (!match) throw new LocalizedError("errorCharsetFormat");
-      const charset = Array.from(JSON.parse(match[1]) as string);
+      let charset: string[] = [];
+      if (charsetBytes) {
+        const match = new TextDecoder().decode(charsetBytes).match(/charset_train:\s*("(?:\\.|[^"\\])*")/);
+        if (!match) throw new LocalizedError("errorCharsetFormat");
+        charset = Array.from(JSON.parse(match[1]) as string);
+      }
 
       return {
         revision,
@@ -201,10 +212,11 @@ async function loadCachedAsset(
   return new Uint8Array(data);
 }
 
-async function getModels(revision: string, signal?: AbortSignal): Promise<LoadedModels> {
+async function getModels(revision: string, recognition: boolean, signal?: AbortSignal): Promise<LoadedModels> {
   if (!modelPromise) {
     loadedRevision = revision;
-    modelPromise = loadModels(revision, signal).catch((error) => {
+    loadedRecognition = recognition;
+    modelPromise = loadModels(revision, recognition, signal).catch((error) => {
       modelPromise = null;
       throw error;
     });
@@ -240,7 +252,7 @@ export async function releaseNdlOcrModels(): Promise<void> {
       if (activeOcrRuns > 0 || modelPromise !== pendingModels) return;
       const results = await Promise.allSettled([
         models.detector.release(),
-        models.recognizer.release(),
+        models.recognizer?.release() ?? Promise.resolve(),
       ]);
       results
         .filter((result): result is PromiseRejectedResult => result.status === "rejected")
@@ -673,10 +685,12 @@ async function recognizeCanvasLine(
   signal?: AbortSignal,
 ): Promise<DecodedRecognition> {
   throwIfAborted(signal);
+  const recognizer = models.recognizer;
+  if (!recognizer) throw new OcrFailure("PARSeq recognition model is not loaded", "model");
   const input = recognizerInput(source, region, orientation, deskewAngle);
   let outputs: ort.InferenceSession.OnnxValueMapType | null = null;
   try {
-    outputs = await models.recognizer.run({ [models.recognizer.inputNames[0]]: input });
+    outputs = await recognizer.run({ [recognizer.inputNames[0]]: input });
     throwIfAborted(signal);
     return decodeText(outputs, models.charset);
   } finally {
@@ -685,16 +699,31 @@ async function recognizeCanvasLine(
   }
 }
 
-export async function recognizePageWithNdlLite(
+export function recognizePageWithNdlLite(
   page: ViewerPage,
   options: NdlOcrOptions = DEFAULT_NDL_OCR_OPTIONS,
   onProgress: ProgressCallback = () => undefined,
   signal?: AbortSignal,
 ): Promise<NdlOcrResult> {
+  return runNdlPage("recognize", { page, options, onProgress, signal });
+}
+
+export function detectPageLines(
+  page: ViewerPage,
+  options: NdlOcrOptions = DEFAULT_NDL_OCR_OPTIONS,
+  onProgress: ProgressCallback = () => undefined,
+  signal?: AbortSignal,
+): Promise<DetectedPage> {
+  return runNdlPage("detect", { page, options, onProgress, signal });
+}
+
+type NdlPageInput = { page: ViewerPage; options: NdlOcrOptions; onProgress: ProgressCallback; signal?: AbortSignal };
+function runNdlPage(mode: "detect", input: NdlPageInput): Promise<DetectedPage>;
+function runNdlPage(mode: "recognize", input: NdlPageInput): Promise<NdlOcrResult>;
+async function runNdlPage(mode: "detect" | "recognize", { page, options, onProgress, signal }: NdlPageInput): Promise<DetectedPage | NdlOcrResult> {
   if (page.ocrAvailability === "unsupported") throw new OcrFailure(page.unsupportedReason ?? "Unsupported Canvas", "unsupported");
   const normalizedOptions = normalizeNdlOcrOptions(options);
   const startedAt = Date.now();
-  resetCanvasCounters();
   const stats: OcrRunStats = {
     detectionCount: 0, modelInferenceCount: 0, adaptiveTiles: 0, initialRecognitions: 0,
     extraRecognitions: 0, extraRecognitionAttempts: 0, highResolutionRetries: 0,
@@ -705,8 +734,10 @@ export async function recognizePageWithNdlLite(
   if (releasePromise) await releasePromise;
   if (activeOcrRuns > 0) throw new OcrFailure("Another OCR operation is still running", "worker");
   const revision = ndlModelRevision(normalizedOptions.modelRevision);
-  if (modelPromise && loadedRevision !== revision) await releaseNdlOcrModels();
+  if (modelPromise && (loadedRevision !== revision || mode === "recognize" && !loadedRecognition)) await releaseNdlOcrModels();
+  if (activeOcrRuns > 0) throw new OcrFailure("Another OCR operation is still running", "worker");
   activeOcrRuns++;
+  resetCanvasCounters();
   let currentCanvas: OcrCanvas | null = null;
   let currentSegment = -1;
   const recordCanvas = (canvas: OcrCanvas) => { stats.maxCanvasPixels = Math.max(stats.maxCanvasPixels, canvas.width * canvas.height); };
@@ -736,7 +767,7 @@ export async function recognizePageWithNdlLite(
     };
     onProgress({ stage: "models", percent: 5, messageKey: "progressModels" });
     let models: LoadedModels;
-    try { models = await getModels(revision, signal); }
+    try { models = await getModels(revision, mode === "recognize", signal); }
     catch (error) {
       throwIfAborted(signal);
       throw new OcrFailure(`OCR model initialization failed: ${String(error)}`, "model");
@@ -771,6 +802,12 @@ export async function recognizePageWithNdlLite(
     const containingTile = (box: Detection) => source.segments.findIndex(({ region }) => box.x >= region.x && box.y >= region.y && box.x + box.width <= region.x + region.width && box.y + box.height <= region.y + region.height);
     detections.sort((a, b) => containingTile(a) - containingTile(b));
     stats.detectionCount = detections.length;
+    if (mode === "detect") {
+      stats.durationMs = Date.now() - startedAt;
+      onProgress({ stage: "done", percent: 100, messageKey: "progressDone", params: { count: detections.length }, completed: detections.length, total: detections.length });
+      return { imageWidth: source.width, imageHeight: source.height, detections, detectorRevision: models.revision,
+        provider: models.provider, options: normalizedOptions, stats };
+    }
     const candidates: RecognitionCandidate[][] = [];
     const retryTargets: RetryTarget[] = [];
     const contains = (outer: OcrRegion, inner: OcrRegion) => inner.x >= outer.x - 0.01 && inner.y >= outer.y - 0.01

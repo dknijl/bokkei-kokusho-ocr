@@ -2,8 +2,8 @@ import type { ViewerPage } from "../../iiif.ts";
 import type { TranslationKey } from "../../i18n.ts";
 import type { NdlOcrOptions } from "../profiles.ts";
 import type {
-  OcrConfidenceKind,
   OcrEngineId,
+  OcrGenerationDiagnostics,
   OcrLine,
   OcrRunStats,
 } from "../types.ts";
@@ -11,8 +11,6 @@ import type {
 export type {
   OcrConfidenceKind,
   OcrEngineId,
-  OcrEngineComparison,
-  OcrRunMode,
   OcrLine,
   OcrRegion,
   OcrRunStats,
@@ -32,12 +30,7 @@ export type ModelLoadProgress = {
   cached?: boolean;
 };
 
-export type RecognizerDiagnostics = {
-  generatedTokens?: number;
-  stopReason?: "eos" | "max-length" | "degenerate-repeat";
-  meanLogProbability?: number;
-  minimumTokenProbability?: number;
-};
+export type RecognizerDiagnostics = OcrGenerationDiagnostics;
 
 export type RecognizerContext = {
   signal?: AbortSignal;

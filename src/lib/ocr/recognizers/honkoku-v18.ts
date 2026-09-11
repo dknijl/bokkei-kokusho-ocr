@@ -18,7 +18,7 @@ import { fetchHonkokuModelManifest, HONKOKU_V18_UPSTREAM_COMMIT } from "../model
 import { cacheHonkokuManifest } from "../models/model-cache.ts";
 import type { OcrLine } from "../types.ts";
 import type { HonkokuWorkerIn, HonkokuWorkerOut } from "./honkoku-v18-protocol.ts";
-import { isWebGpuAvailable } from "../models/runtime.ts";
+import { chooseHonkokuRuntime } from "../models/runtime.ts";
 
 export const HONKOKU_V18_RECOGNIZER_REVISION = `honkoku-v18@${HONKOKU_V18_UPSTREAM_COMMIT}`;
 
@@ -35,112 +35,121 @@ export class HonkokuV18Recognizer implements LineRecognizer {
   readonly id = "honkoku-v18" as const;
   readonly revision = HONKOKU_V18_RECOGNIZER_REVISION;
   private worker: Worker | null = null;
-  private manifestUrl = "";
   private runCounter = 0;
+  private generation = 0;
   private pending = new Map<string, PendingRequest>();
+  private rejectInitialization: ((error: Error) => void) | null = null;
+  private initializing = false;
   private initialized = false;
   private provider = "WASM";
+  private manifestDigest = "";
+  private readonly manifestUrl: string;
 
   constructor(manifestUrl = HONKOKU_V18_MANIFEST_URL) {
     this.manifestUrl = manifestUrl;
   }
 
   async initialize(context: RecognizerContext): Promise<void> {
+    if (context.signal?.aborted) throw abortError();
     if (this.initialized) return;
-    assertHonkokuV18Configured(this.manifestUrl);
-    const { manifest, digest } = await fetchHonkokuModelManifest(this.manifestUrl, context.signal);
-    if (manifest.upstreamCommit !== HONKOKU_V18_UPSTREAM_COMMIT) {
-      throw new Error("Honkoku model manifest is not pinned to the supported v18 upstream commit.");
-    }
-    await cacheHonkokuManifest(this.manifestUrl, manifest, digest);
-    const worker = new Worker(new URL("./honkoku-v18.worker.ts", import.meta.url), { type: "module" });
-    this.worker = worker;
-    const runId = this.nextRunId();
-    await new Promise<void>((resolve, reject) => {
-      const onAbort = () => {
-        worker.postMessage({ type: "cancel", runId } satisfies HonkokuWorkerIn);
-        reject(abortError());
-      };
-      context.signal?.addEventListener("abort", onAbort, { once: true });
-      worker.onmessage = (event: MessageEvent<HonkokuWorkerOut>) => {
-        const message = event.data;
-        if (message.runId !== runId) return;
-        if (message.type === "model-progress") {
-          context.onModelProgress?.(message.progress);
-        } else if (message.type === "ready") {
+    if (this.initializing) throw new Error("Honkoku v18 initialization is already running.");
+    this.initializing = true;
+    const generation = this.generation;
+    const checkActive = () => {
+      if (context.signal?.aborted || generation !== this.generation) throw abortError();
+    };
+    try {
+      assertHonkokuV18Configured(this.manifestUrl);
+      const { manifest, digest } = await fetchHonkokuModelManifest(this.manifestUrl, context.signal);
+      checkActive();
+      if (manifest.upstreamCommit !== HONKOKU_V18_UPSTREAM_COMMIT) {
+        throw new Error("Honkoku model manifest is not pinned to the supported v18 upstream commit.");
+      }
+      await cacheHonkokuManifest(this.manifestUrl, manifest, digest);
+      const useWebGpu = await chooseHonkokuRuntime() === "webgpu";
+      checkActive();
+      const worker = new Worker(new URL("./honkoku-v18.worker.ts", import.meta.url), { type: "module" });
+      this.worker = worker;
+      const runId = this.nextRunId();
+      await new Promise<void>((resolve, reject) => {
+        const finish = (error?: Error) => {
           context.signal?.removeEventListener("abort", onAbort);
-          this.provider = message.provider;
-          this.initialized = true;
-          resolve();
-        } else if (message.type === "error") {
-          context.signal?.removeEventListener("abort", onAbort);
-          reject(new Error(message.error));
-        }
-      };
-      worker.onerror = (event) => {
-        context.signal?.removeEventListener("abort", onAbort);
-        reject(new Error(event.message || "Honkoku v18 worker failed to initialize."));
-      };
-      const useWebGpu = !this.isMobile() && typeof navigator !== "undefined" && "gpu" in navigator;
-      worker.postMessage({
-        type: "initialize",
-        runId,
-        manifestUrl: this.manifestUrl,
-        manifest,
-        useWebGpu,
-      } satisfies HonkokuWorkerIn);
-    }).catch(async (error) => {
+          this.rejectInitialization = null;
+          if (error) reject(error); else resolve();
+        };
+        const onAbort = () => this.failWorker(abortError());
+        this.rejectInitialization = finish;
+        context.signal?.addEventListener("abort", onAbort, { once: true });
+        worker.onmessage = ({ data }: MessageEvent<HonkokuWorkerOut>) => {
+          if (this.worker !== worker) return;
+          if (data.runId !== runId) { this.receiveRecognition(data); return; }
+          if (data.type === "model-progress") context.onModelProgress?.(data.progress);
+          else if (data.type === "ready") {
+            this.provider = data.provider;
+            this.initialized = true;
+            finish();
+          } else if (data.type === "error") finish(new Error(data.error));
+        };
+        worker.onerror = event => { if (this.worker === worker) this.failWorker(new Error(event.message || "Honkoku v18 worker failed.")); };
+        worker.onmessageerror = () => { if (this.worker === worker) this.failWorker(new Error("Honkoku v18 worker returned unreadable data.")); };
+        try {
+          worker.postMessage({ type: "initialize", runId, manifestUrl: this.manifestUrl, manifest, useWebGpu } satisfies HonkokuWorkerIn);
+        } catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+      });
+      checkActive();
+      this.manifestDigest = digest;
+    } catch (error) {
       await this.dispose();
       throw error;
-    });
+    } finally { this.initializing = false; }
   }
 
   async recognize(input: RecognizerInput, context: RecognizerContext = {}): Promise<RecognizerOutput> {
-    if (!this.worker || !this.initialized) throw new Error("Honkoku v18 recognizer is not initialized.");
     if (context.signal?.aborted) throw abortError();
+    if (!this.worker || !this.initialized) throw new Error("Honkoku v18 recognizer is not initialized.");
+    if (this.pending.size) throw new Error("Another Honkoku v18 recognition is still running.");
     const runId = this.nextRunId();
-    const pending = new Promise<RecognizerOutput>((resolve, reject) => {
-      this.pending.set(`${runId}:${input.lineId}`, { resolve, reject });
-    });
-    const onAbort = () => {
-      this.worker?.postMessage({ type: "cancel", runId } satisfies HonkokuWorkerIn);
-      this.pending.get(`${runId}:${input.lineId}`)?.reject(abortError());
-      this.pending.delete(`${runId}:${input.lineId}`);
-    };
+    const key = `${runId}:${input.lineId}`;
+    const pending = new Promise<RecognizerOutput>((resolve, reject) => { this.pending.set(key, { resolve, reject }); });
+    const onAbort = () => this.failWorker(abortError());
     context.signal?.addEventListener("abort", onAbort, { once: true });
-    this.worker.postMessage({ type: "recognize", runId, lineId: input.lineId, crop: input.crop } satisfies HonkokuWorkerIn);
     try {
-      return await pending;
-    } finally {
+      this.worker.postMessage({ type: "recognize", runId, lineId: input.lineId, crop: input.crop } satisfies HonkokuWorkerIn);
+    } catch (error) { this.failWorker(error instanceof Error ? error : new Error(String(error))); }
+    try { return await pending; }
+    finally {
       context.signal?.removeEventListener("abort", onAbort);
-      this.pending.delete(`${runId}:${input.lineId}`);
+      this.pending.delete(key);
     }
   }
 
-  async dispose(): Promise<void> {
-    for (const request of this.pending.values()) request.reject(abortError());
-    this.pending.clear();
-    const worker = this.worker;
-    this.worker = null;
-    this.initialized = false;
-    if (!worker) return;
-    worker.postMessage({ type: "dispose", runId: this.nextRunId() } satisfies HonkokuWorkerIn);
-    worker.terminate();
+  private receiveRecognition(message: HonkokuWorkerOut): void {
+    if (message.type !== "line-result" && message.type !== "error") return;
+    if (message.lineId === undefined) return;
+    const request = this.pending.get(`${message.runId}:${message.lineId}`);
+    if (!request) return;
+    if (message.type === "line-result") request.resolve(message.result);
+    else request.reject(new Error(message.error));
   }
 
-  get runtimeProvider(): string {
-    return this.provider;
+  private failWorker(error: Error): void {
+    this.generation++;
+    this.rejectInitialization?.(error);
+    for (const request of this.pending.values()) request.reject(error);
+    this.pending.clear();
+    this.worker?.terminate();
+    this.worker = null;
+    this.initialized = false;
   }
+
+  async dispose(): Promise<void> { this.failWorker(abortError()); }
+
+  get runtimeProvider(): string { return this.provider; }
+  get modelManifestDigest(): string { return this.manifestDigest; }
 
   private nextRunId(): string {
     this.runCounter += 1;
     return `honkoku-${Date.now().toString(36)}-${this.runCounter.toString(36)}`;
-  }
-
-  private isMobile(): boolean {
-    if (typeof navigator === "undefined") return false;
-    return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
-      || navigator.maxTouchPoints > 1 && Math.min(screen.width, screen.height) < 1024;
   }
 }
 
@@ -208,7 +217,7 @@ export async function recognizePageWithHonkokuV18(
       const detection = detected.detections[index]!;
       const mapped = mapDetectionToHonkokuCrop(
         detection,
-        { width: detected.detectionImageWidth, height: detected.detectionImageHeight },
+        { width: detected.imageWidth, height: detected.imageHeight },
         { width: recognitionImage.width, height: recognitionImage.height },
       );
       const crop = cropImageDataWithWhitePadding(recognitionImage, mapped.region);
@@ -260,20 +269,19 @@ export async function recognizePageWithHonkokuV18(
       total: lines.length,
       params: { count: lines.length },
     });
-    const manifest = await fetchHonkokuModelManifest(manifestUrl, signal);
     return {
-      imageWidth: detected.detectionImageWidth,
-      imageHeight: detected.detectionImageHeight,
+      imageWidth: detected.imageWidth,
+      imageHeight: detected.imageHeight,
       lines: orderedLines,
       engineId: "honkoku-v18",
       engineLabel: "みんなで翻刻 v18",
       provider: recognizer.runtimeProvider,
       detectorRevision: detected.detectorRevision,
       recognizerRevision: recognizer.revision,
-      modelManifestDigest: manifest.digest,
+      modelManifestDigest: recognizer.modelManifestDigest,
       pipelineVersion: OCR_PIPELINE_VERSION,
-      profile: options.profile,
-      options,
+      profile: detected.options.profile,
+      options: detected.options,
       stats,
       revision: recognizer.revision,
     };
@@ -284,10 +292,6 @@ export async function recognizePageWithHonkokuV18(
     throw error;
   } finally {
     await recognizer.dispose();
-    if (detected?.detectionImage) {
-      detected.detectionImage.width = 0;
-      detected.detectionImage.height = 0;
-    }
     if (recognitionCanvas) {
       recognitionCanvas.width = 0;
       recognitionCanvas.height = 0;

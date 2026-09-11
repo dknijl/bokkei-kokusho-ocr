@@ -171,7 +171,7 @@
           <span>{label("処理結果は保存されています。", "Processed results remain saved.")}</span>
         {/if}
       </div>
-      {#if !resumable}<p class="batch-note">{label("以前のOCR方式で保存した結果です。ZIP保存は可能です。今回の修正を反映するには「全コマをOCR」を実行してください。", "These results use an older OCR version. You can export them, or run OCR all canvases to apply the update.")}</p>{/if}
+      {#if !resumable}<p class="batch-note">{label("OCRを再度実行する場合は「全コマをOCR」を押してください。", "To run OCR again, click “OCR all canvases”.")}</p>{/if}
     </div>
   {:else if running}
     <p role="status">{label("全コマOCRを準備中…", "Preparing manifest OCR…")}</p>
@@ -182,7 +182,11 @@
       <button type="button" disabled={exporting} onclick={() => void savePart(part, index)}>ZIP {index + 1}/{parts.length}</button>
     {/each}
   {/if}
-  <p class="batch-note">{workerAvailable ? (running ? label("タブを開いたまま実行してください。", "Keep this tab open while processing. ") : "") + label("文字未検出は白紙の判定ではありません。", "No text detected does not mean the canvas is blank.") : label("このブラウザでは全コマOCRを利用できません。単ページOCRを使用してください。", "This browser does not support batch OCR. Use single-page OCR.")}</p>
+  {#if !workerAvailable}
+    <p class="batch-note">{label("このブラウザでは全コマOCRを利用できません。単ページOCRを使用してください。", "This browser does not support batch OCR. Use single-page OCR.")}</p>
+  {:else if running}
+    <p class="batch-note">{label("タブを開いたまま実行してください。", "Keep this tab open while processing.")}</p>
+  {/if}
   {#if error || job?.error}<p class="batch-error" role="alert">{error || job?.error}</p>{/if}
 </section>
 

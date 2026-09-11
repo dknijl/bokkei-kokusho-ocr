@@ -81,7 +81,7 @@ node scripts/assess-ocr-correction.mjs \
 
 初回の比較結果は同ディレクトリの`results.json`、誤結合修正後の実モデル結果は`layout-regression-results.json`と下記の記録を参照する。
 
-- 型検査の既存エラー: 未追跡・未統合のHonkoku関連6ファイルに16件。`confidence.ts`, `registry.ts`, `engine/types.ts`, `models/manifest.ts`, `recognizers/honkoku-v18.ts`, `page-ocr.ts`。今回の変更対象のエラーとは分けて確認する。
+- 修正前の型検査エラー: 未統合のHonkoku関連6ファイルに16件。`confidence.ts`, `registry.ts`, `engine/types.ts`, `models/manifest.ts`, `recognizers/honkoku-v18.ts`, `page-ocr.ts`。下記の「Honkoku型整合性と応答処理を修正」で解消した。
 - 機能テストのOCRは模擬。実モデルの認識率の証拠としては使わない。
 - 模擬1,000コマでは実OffscreenCanvasとSauvola処理を使い、保存時点の未解放Canvas数0を確認する。1,000コマを実ONNXで処理した試験ではない。
 - 実モデル試験では通常・絵入・細長い資料をWASM/WebGPUで実行し、実行後のCanvas数0、追加推論枠、取得領域数を検証する。GPU/CPU Tensorは推論ごとのfinallyでdisposeする。GPUドライバ内部のメモリ常駐量を測定したものではない。
@@ -130,6 +130,32 @@ ZIP簡素化前の本番ビルドの実OCRテスト1件も成功（29.0秒）。
 - WASM/WebGPUの実モデル試験はともに通常14行・絵入31行・絵巻83行（21領域）で成功。全6実行で解放後Canvas数0、追加推論上限内。実測は`work/ocr-evaluation/real-wasm.json`と`real-auto.json`。検出行数は文字認識精度の保証ではない。
 - WASM試験では従来のWorker本文を書き換える方法で画像取得が2度失敗した。GPUを無効にしたブラウザ用fixtureへ変更後、WebGPU初期化失敗からWASMへ切り替わり、全3資料の試験が成功した（計1.7分）。OCR結果の模擬やアプリの画像取得処理の変更は行っていない。WebGPU試験は別実行で成功を確認した。
 - 型検査は未統合Honkoku関連6ファイルの既存16件で失敗。該当ファイルを削除・検査除外せず維持し、今回の変更による新規エラーはなかった。
+
+### 2026-09-11 Honkoku型整合性と応答処理を修正
+
+共通のエンジンID・信頼度種別・Koji原文・生成診断の型を定義し、実装も利用箇所もない型の再exportを除去した。欠けていたエラー文言も追加。エンジンを削除せず、型アサーションや検査除外で回避せずに型検査16件を解消した。
+
+`detectPageLines`はNDLの既存取得・タイル検出・重複統合処理を共用し、原画像座標の検出枠と実寸を返す。画像資源は関数内で解放する。検出だけの実行ではPARSeqと文字集合を取得せず、その後の通常OCRでは認識モデルを追加した構成に切り替える。Honkokuの切り出しはこの原画像座標を使用する。ページOCRのモデル版表示・キャッシュ識別子も実行版に合わせた。
+
+Honkoku Workerの認識結果が初期化時のrun ID判定で無視され、待機が終わらなかった問題を修正。run IDと行IDで応答を照合し、同時認識を拒否する。初期化・推論中の中止と破棄、Worker異常、メッセージ解読失敗は待機を解除し、Workerを終了する。破棄済みWorkerの遅れた応答・異常を新しい実行へ反映しない。結果のManifestダイジェストは実際にロードした値を保持し、認識後に再取得した別の値で置き換えない。Kojiの平文変換規則は変更していない。
+
+検証結果：
+
+- `npm test`が成功。型検査0件・警告0件、単体57件、本番ビルド。
+- 通常ブラウザ20件、Honkoku接続処理のブラウザ9件が成功。後者はモデル応答を模擬し、ID不一致・競合・失敗・中止・初期化中の破棄・再初期化・ページへのKoji受け渡しを確認。
+- NDL実モデル3テストが成功。通常・絵入・絵巻をWASM/WebGPUで再検証し、14・31・83行、解放後Canvas数0。追加の検出専用試験ではCanvasの寸法を100×150に変えても原画像3744×5616の14枠を返し、PARSeq未取得・文字認識0回を確認。同じ実行環境から通常OCRへ切り替えると14行を認識し、検出モデルの追加ダウンロードはなかった。
+- 本番ビルドの実OCR・ZIP試験1件も成功（33.6秒）。3/3コマの完了、ZIP展開、再読み込み後のモデルキャッシュ利用を確認。
+
+Honkoku実モデルの配信Manifestはこの環境で未設定であり、Honkokuの実推論・認識精度は未検証。既存の実モデルsmoke testは、存在しない画面のエンジン選択欄から、実装されている`recognizePage` APIを呼ぶ方法へ修正した。通常の画面は引き続きNDLを使用する。
+
+修正の契約：共通型は`code.domain.v1`、検出モデル・画像の解放とWorker待機の所有は`code.effects.v1`、各不具合の再現・回帰検証は`code.verification.v1`を適用。
+
+```sh
+npm test
+PLAYWRIGHT_BROWSERS_PATH="$PWD/work/playwright-browsers" npm run test:browser
+PLAYWRIGHT_BROWSERS_PATH="$PWD/work/playwright-browsers" npx playwright test --config playwright.honkoku-adapter.config.ts
+OCR_REQUIRE_WEBGPU=1 PLAYWRIGHT_BROWSERS_PATH="$PWD/work/playwright-browsers" npx playwright test --config playwright.ocr-evaluation.config.ts pipeline.spec.ts detector.spec.ts
+```
 
 再現コマンド：
 

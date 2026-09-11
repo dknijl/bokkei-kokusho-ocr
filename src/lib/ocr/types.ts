@@ -40,8 +40,23 @@ export type OcrAlternative = {
 
 export type OcrSelectionReason = "consensus" | "score" | "original-tie" | "evaluation-only";
 
-export type OcrLine = {
+export type OcrEngineId = "ndl-parseq" | "honkoku-v18";
+export type OcrConfidenceKind = "parseq-token" | "autoregressive-token" | "unavailable";
+export type OcrGenerationDiagnostics = {
+  generatedTokens?: number;
+  stopReason?: "eos" | "max-length" | "degenerate-repeat";
+  meanLogProbability?: number;
+  minimumTokenProbability?: number;
+};
+
+export type OcrLine = OcrGenerationDiagnostics & {
   text: string;
+  rawKoji?: string;
+  outputFormat?: "plain" | "koji";
+  recognizerId?: OcrEngineId;
+  recognizerRevision?: string;
+  confidenceKind?: OcrConfidenceKind;
+  confidenceCalibrated?: boolean;
   region?: OcrRegion;
   id?: string;
   detectionIndex?: number;

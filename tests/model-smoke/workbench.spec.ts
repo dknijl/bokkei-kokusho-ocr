@@ -25,20 +25,19 @@ test.describe("Honkoku v18 real-model smoke test", () => {
     });
 
     await page.goto("./");
-    if (smokeIiifManifestUrl) {
-      await page.locator("button.rail-add").click();
-      await page.locator("#manifest-url").fill(smokeIiifManifestUrl);
-      await page.locator(".manifest-form .load-button").click();
-      await expect(page.locator(".manifest-dialog")).toBeHidden({ timeout: 30_000 });
-    }
-
-    await page.locator("#ocr-engine").selectOption("honkoku-v18");
-    await page.locator("button.run-full-ocr").click();
-    await expect(page.locator("button.run-full-ocr")).toBeVisible({ timeout: 9 * 60 * 1000 });
-    await expect(page.locator(".full-ocr-error")).toHaveCount(0);
+    // The engine is exposed through this API; the production UI still uses NDL.
+    const result = await page.evaluate(async ({ modelManifestUrl, smokeIiifManifestUrl }) => {
+      const { initialManifest, parseManifest } = await import("/ocr/src/lib/iiif.ts");
+      const { recognizePage } = await import("/ocr/src/lib/page-ocr.ts");
+      const url = smokeIiifManifestUrl || initialManifest.url;
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`IIIF manifest HTTP ${response.status}`);
+      const manifest = parseManifest(await response.json(), url);
+      return recognizePage(manifest.pages[0], { engineId: "honkoku-v18", modelManifestUrl });
+    }, { modelManifestUrl, smokeIiifManifestUrl });
     await expect.poll(() => modelManifestRequests).toBeGreaterThan(0);
-
-    const recognizedLines = await page.locator(".vertical-text button[data-line-index]").count();
-    expect(recognizedLines).toBeGreaterThan(0);
+    expect(result.engineId).toBe("honkoku-v18");
+    expect(result.lines.length).toBeGreaterThan(0);
+    expect(result.lines.every(line => line.rawKoji !== undefined)).toBe(true);
   });
 });

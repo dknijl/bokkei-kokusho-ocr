@@ -874,7 +874,7 @@ import {
       </button>
     {/each}
   {:else}
-    <div class="ocr-empty"><strong>{page.ocrEngine ? (locale === "ja" ? "文字行が検出されませんでした" : "No text lines detected") : t(locale, "ocrNotRun")}</strong><span>{page.ocrEngine ? (locale === "ja" ? "白紙と判定した結果ではありません。" : "This does not establish that the canvas is blank.") : t(locale, "runOcrInstruction")}</span></div>
+    <div class="ocr-empty"><strong>{page.ocrEngine ? (locale === "ja" ? "文字行が検出されませんでした" : "No text lines detected") : t(locale, "ocrNotRun")}</strong>{#if !page.ocrEngine}<span>{t(locale, "runOcrInstruction")}</span>{/if}</div>
   {/if}
 {/snippet}
 
