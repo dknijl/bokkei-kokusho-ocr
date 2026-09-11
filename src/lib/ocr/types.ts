@@ -13,7 +13,8 @@ export type RecognitionPreprocessing =
   | "grayscale-contrast"
   | "background-normalized"
   | "ink-channel"
-  | "adaptive-binary";
+  | "adaptive-binary"
+  | "sauvola";
 
 export type RecognitionOrientation = "auto" | "normal" | "rotate-90";
 
@@ -28,9 +29,16 @@ export type OcrAlternative = {
   preprocessing: RecognitionPreprocessing;
   orientation?: RecognitionOrientation;
   deskewAngle?: number;
+  input?: {
+    imageUrl: string;
+    sourceRegion: OcrRegion;
+    width: number;
+    height: number;
+    parameters?: Record<string, number | string>;
+  };
 };
 
-export type OcrSelectionReason = "consensus" | "score" | "original-tie";
+export type OcrSelectionReason = "consensus" | "score" | "original-tie" | "evaluation-only";
 
 export type OcrLine = {
   text: string;
@@ -52,6 +60,7 @@ export type OcrLine = {
   alternatives?: OcrAlternative[];
   uncertain?: boolean;
   selectionReason?: OcrSelectionReason;
+  input?: OcrAlternative["input"];
 };
 
 export type CropPadding = {
@@ -71,4 +80,9 @@ export type OcrRunStats = {
   additionalCropFailures: number;
   maxCanvasPixels: number;
   durationMs: number;
+  imageRequests?: number;
+  sourceTiles?: number;
+  warnings?: string[];
+  maxLiveCanvases?: number;
+  liveCanvasesAfterPage?: number;
 };

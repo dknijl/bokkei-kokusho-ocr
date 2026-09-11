@@ -103,14 +103,16 @@ export function buildLineCropUrl(
 
   const expanded = expandCropRegion(region, padding, detectedImageSize, neighbors);
   const detectedBounds = floorCeilCropRegion(expanded, detectedImageSize);
-  const scaleX = page.width / detectedImageSize.width;
-  const scaleY = page.height / detectedImageSize.height;
+  const sourceWidth = page.sourceWidth || page.width;
+  const sourceHeight = page.sourceHeight || page.height;
+  const scaleX = sourceWidth / detectedImageSize.width;
+  const scaleY = sourceHeight / detectedImageSize.height;
   const pageBounds = floorCeilCropRegion({
     x: detectedBounds.x * scaleX,
     y: detectedBounds.y * scaleY,
     width: detectedBounds.width * scaleX,
     height: detectedBounds.height * scaleY,
-  }, { width: page.width, height: page.height });
+  }, { width: sourceWidth, height: sourceHeight });
   const size = Math.max(1, Math.floor(maxSize));
   const service = page.imageServiceId.replace(/\/$/, "");
   return `${service}/${pageBounds.x},${pageBounds.y},${pageBounds.width},${pageBounds.height}/!${size},${size}/0/default.jpg`;

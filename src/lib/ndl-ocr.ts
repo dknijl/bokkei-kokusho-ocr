@@ -1,8 +1,9 @@
+import { createOcrCanvas, releaseOcrCanvas, type OcrCanvas } from "./ocr/canvas.ts";
 import * as ort from "onnxruntime-web/webgpu";
 import type { OcrLine, OcrRegion, ViewerPage } from "./iiif";
 import { LocalizedError, type MessageParams } from "./i18n";
 import { OCR_PIPELINE_VERSION } from "./ocr/benchmark.ts";
-import { DEFAULT_CROP_PADDING, buildLineCropUrl, expandCropRegion, floorCeilCropRegion } from "./ocr/image.ts";
+import { DEFAULT_CROP_PADDING, expandCropRegion, floorCeilCropRegion } from "./ocr/image.ts";
 import { globalNms, mergeAdjacentDetections, type Detection } from "./ocr/nms.ts";
 import {
   recognitionCandidateFromDecoded,
@@ -24,12 +25,6 @@ import {
   transformLineCanvas,
 } from "./ocr/preprocessing.ts";
 import {
-  estimatePaperMask,
-  paperScoreForRegion,
-  shouldSuppressSoftPaperCandidate,
-  type PaperMaskResult,
-} from "./ocr/paper-mask.ts";
-import {
   combineSegmentRecognitions,
   createLineWindows,
   findSignificantInkGap,
@@ -48,18 +43,19 @@ import {
   writeOcrModelAsset,
 } from "./ocr/model-cache.ts";
 
-export const NDL_MODEL_REF = "master";
-const MODEL_ROOT = `https://raw.githubusercontent.com/ndl-lab/ndlkotenocr-lite/${NDL_MODEL_REF}`;
-const DETECTOR_URL = `${MODEL_ROOT}/src/model/rtmdet-s-1280x1280.onnx`;
-const RECOGNIZER_URL = `${MODEL_ROOT}/src/model/parseq-ndl-32x384-tiny-10.onnx`;
-const CHARSET_URL = `${MODEL_ROOT}/src/config/NDLmoji.yaml`;
+import { ndlModelRevision } from "./ocr/model-revision.ts";
+export { NDL_MODEL_REVISION, NDL_MODEL_REF } from "./ocr/model-revision.ts";
+import { yieldOcr, resetCanvasCounters, canvasCounters } from "./ocr/canvas.ts";
+import { OcrFailure, fetchOcrResource } from "./ocr/network.ts";
+import { resolvePageImageSource, sourceRegionUrl, toSourceRegion, toSegmentRegion } from "./ocr/image-source.ts";
+import { measureImageQuality } from "./ocr/preprocessing.ts";
+import { mergeSourceDetections } from "./ocr/source-detections.ts";
+import { scheduleRetries, type RetryTarget } from "./ocr/retry-policy.ts";
 // The official filename says 1280x1280, but the pinned ONNX graph metadata
 // requires [1, 3, 1024, 1024]. The graph shape is authoritative.
 const DETECTOR_SIZE = 1024;
 const RECOGNIZER_WIDTH = 384;
 const RECOGNIZER_HEIGHT = 32;
-const OCR_UI_YIELD_INTERVAL = 4;
-const MODEL_CACHE_KEY_PREFIX = `ndl-ocr:${NDL_MODEL_REF}:`;
 
 export type NdlOcrStage = "image" | "models" | "detect" | "recognize" | "retry" | "done";
 export type NdlOcrProgressKey = "progressStarting" | "progressImage" | "progressModels" | "progressDetect" | "progressRecognize" | "progressRetry" | "progressDone";
@@ -77,7 +73,7 @@ export type NdlOcrResult = {
   imageWidth: number;
   imageHeight: number;
   lines: OcrLine[];
-  provider: "WebGPU / WASM" | "WASM";
+  provider: "WebGPU" | "WebGPU / WASM" | "WASM";
   revision: string;
   pipelineVersion: string;
   profile: NdlOcrOptions["profile"];
@@ -87,6 +83,7 @@ export type NdlOcrResult = {
 
 type ProgressCallback = (progress: NdlOcrProgress) => void;
 type LoadedModels = {
+  revision: string;
   detector: ort.InferenceSession;
   recognizer: ort.InferenceSession;
   charset: string[];
@@ -94,7 +91,8 @@ type LoadedModels = {
 };
 
 let modelPromise: Promise<LoadedModels> | null = null;
-let releaseTimer: number | null = null;
+let loadedRevision: string | null = null;
+let releaseTimer: ReturnType<typeof setTimeout> | null = null;
 let activeOcrRuns = 0;
 let releasePromise: Promise<void> | null = null;
 
@@ -105,9 +103,7 @@ const throwIfAborted = (signal?: AbortSignal) => {
   if (signal?.aborted) throw new DOMException("ocrCancelled", "AbortError");
 };
 
-const nextFrame = () => typeof requestAnimationFrame === "function"
-  ? new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-  : Promise.resolve();
+const nextFrame = yieldOcr;
 
 async function createSession(
   url: string,
@@ -131,42 +127,31 @@ async function createSession(
   return session;
 }
 
-async function loadModels(signal?: AbortSignal): Promise<LoadedModels> {
-  const webGpuAvailable = typeof navigator !== "undefined" && "gpu" in navigator;
+async function loadModels(revision: string, signal?: AbortSignal): Promise<LoadedModels> {
+  const root = `https://raw.githubusercontent.com/ndl-lab/ndlkotenocr-lite/${revision}`;
+  const webGpuAvailable = typeof navigator !== "undefined" && Boolean(navigator.gpu?.requestAdapter);
   requestOcrModelStoragePersistence();
 
   const createBoth = async (useWebGpu: boolean) => {
     let detector: ort.InferenceSession | undefined;
     let recognizer: ort.InferenceSession | undefined;
     try {
-      const results = await Promise.allSettled([
-        createSession(DETECTOR_URL, useWebGpu, signal),
-        createSession(RECOGNIZER_URL, useWebGpu, signal),
-        loadCachedAsset(CHARSET_URL, signal, (status) => new LocalizedError("errorCharsetHttp", { status })),
-      ]);
-      const detectorResult = results[0];
-      const recognizerResult = results[1];
-      const charsetResult = results[2];
-      if (detectorResult.status === "fulfilled") detector = detectorResult.value;
-      if (recognizerResult.status === "fulfilled") recognizer = recognizerResult.value;
-      const failure = results.find((result) => result.status === "rejected");
-      if (failure?.status === "rejected") throw failure.reason;
-      if (!detector || !recognizer || charsetResult.status !== "fulfilled") {
-        throw new Error("NDL OCR model loading returned no sessions.");
-      }
+      const charsetBytes = await loadCachedAsset(`${root}/src/config/NDLmoji.yaml`, signal, (status) => new LocalizedError("errorCharsetHttp", { status }));
+      // ORT WebGPU session initialization must remain sequential.
+      detector = await createSession(`${root}/src/model/rtmdet-s-1280x1280.onnx`, useWebGpu, signal);
+      recognizer = await createSession(`${root}/src/model/parseq-ndl-32x384-tiny-10.onnx`, useWebGpu, signal);
       throwIfAborted(signal);
-
-      const yaml = new TextDecoder().decode(charsetResult.value);
-      throwIfAborted(signal);
+      const yaml = new TextDecoder().decode(charsetBytes);
       const match = yaml.match(/charset_train:\s*("(?:\\.|[^"\\])*")/);
       if (!match) throw new LocalizedError("errorCharsetFormat");
       const charset = Array.from(JSON.parse(match[1]) as string);
 
       return {
+        revision,
         detector,
         recognizer,
         charset,
-        provider: useWebGpu ? "WebGPU / WASM" as const : "WASM" as const,
+        provider: useWebGpu ? "WebGPU" as const : "WASM" as const,
       };
     } catch (error) {
       await Promise.allSettled([
@@ -195,8 +180,9 @@ async function loadCachedAsset(
   createHttpError: (status: number) => Error = (status) => new Error(`OCR model fetch failed with HTTP ${status}.`),
 ): Promise<Uint8Array> {
   throwIfAborted(signal);
-  const key = `${MODEL_CACHE_KEY_PREFIX}${url}`;
+  const key = `ndl-ocr:${url}`;
   const cached = await readOcrModelAsset(key);
+  throwIfAborted(signal);
   if (cached) return new Uint8Array(cached);
 
   let response: Response;
@@ -215,9 +201,10 @@ async function loadCachedAsset(
   return new Uint8Array(data);
 }
 
-async function getModels(signal?: AbortSignal): Promise<LoadedModels> {
+async function getModels(revision: string, signal?: AbortSignal): Promise<LoadedModels> {
   if (!modelPromise) {
-    modelPromise = loadModels(signal).catch((error) => {
+    loadedRevision = revision;
+    modelPromise = loadModels(revision, signal).catch((error) => {
       modelPromise = null;
       throw error;
     });
@@ -235,8 +222,8 @@ function disposeTensors(values: ort.InferenceSession.OnnxValueMapType | null): v
 }
 
 function clearNdlOcrModelReleaseTimer(): void {
-  if (releaseTimer === null || typeof window === "undefined") return;
-  window.clearTimeout(releaseTimer);
+  if (releaseTimer === null) return;
+  clearTimeout(releaseTimer);
   releaseTimer = null;
 }
 
@@ -274,9 +261,8 @@ export async function releaseNdlOcrModels(): Promise<void> {
 }
 
 export function scheduleNdlOcrModelRelease(): void {
-  if (typeof window === "undefined") return;
   clearNdlOcrModelReleaseTimer();
-  releaseTimer = window.setTimeout(() => {
+  releaseTimer = setTimeout(() => {
     releaseTimer = null;
     void releaseNdlOcrModels();
   }, 120_000);
@@ -296,10 +282,10 @@ function fetchImageBlob(url: string, signal?: AbortSignal): Promise<Blob> {
   const request = (async () => {
     let response: Response;
     try {
-      response = await fetch(url, { signal, mode: "cors", cache: "force-cache" });
+      response = await fetchOcrResource(url, { mode: "cors", cache: "force-cache" }, signal);
     } catch (error) {
       if (signal?.aborted) throw new DOMException("ocrCancelled", "AbortError");
-      throw new LocalizedError("errorImageFetch", { detail: error instanceof Error ? ` (${error.message})` : "" });
+      throw error instanceof OcrFailure ? error : new OcrFailure(`Image request failed: ${String(error)}`, "image");
     }
     if (!response.ok) throw new LocalizedError("errorImageHttp", { status: response.status });
     return response.blob();
@@ -319,24 +305,33 @@ function fetchImageBlob(url: string, signal?: AbortSignal): Promise<Blob> {
   });
 }
 
-async function loadImage(url: string, signal?: AbortSignal): Promise<ImageBitmap> {
+const bitmapSourceSizes = new WeakMap<ImageBitmap, { width: number; height: number }>();
+async function loadImage(url: string, signal?: AbortSignal, maxSize = 2048): Promise<ImageBitmap> {
   try {
     const blob = await fetchImageBlob(url, signal);
     throwIfAborted(signal);
-    const bitmap = await createImageBitmap(blob);
+    let bitmap = await createImageBitmap(blob);
+    const originalSize = { width: bitmap.width, height: bitmap.height };
+    if (Math.max(bitmap.width, bitmap.height) > maxSize) {
+      const ratio = maxSize / Math.max(bitmap.width, bitmap.height);
+      const original = bitmap;
+      try { bitmap = await createImageBitmap(original, { resizeWidth: Math.max(1, Math.floor(original.width * ratio)), resizeHeight: Math.max(1, Math.floor(original.height * ratio)), resizeQuality: "high" }); }
+      finally { original.close(); }
+    }
     if (signal?.aborted) {
       bitmap.close();
       throw new DOMException("ocrCancelled", "AbortError");
     }
+    bitmapSourceSizes.set(bitmap, originalSize);
     return bitmap;
   } catch (error) {
     if (signal?.aborted) throw new DOMException("ocrCancelled", "AbortError");
-    throw error;
+    throw error instanceof OcrFailure ? error : new OcrFailure(`Image decode failed: ${String(error)}`, "image");
   }
 }
 
-function imageBitmapCanvas(bitmap: ImageBitmap): HTMLCanvasElement {
-  const canvas = document.createElement("canvas");
+function imageBitmapCanvas(bitmap: ImageBitmap): OcrCanvas {
+  const canvas = createOcrCanvas();
   try {
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
@@ -345,18 +340,17 @@ function imageBitmapCanvas(bitmap: ImageBitmap): HTMLCanvasElement {
     context.drawImage(bitmap, 0, 0);
     return canvas;
   } catch (error) {
-    canvas.width = 0;
-    canvas.height = 0;
+    releaseOcrCanvas(canvas);
     throw error;
   }
 }
 
-function detectorInput(source: HTMLCanvasElement): { tensor: ort.Tensor; paddedSize: number } {
+function detectorInput(source: OcrCanvas): { tensor: ort.Tensor; paddedSize: number } {
   const paddedSize = Math.max(source.width, source.height);
-  const square = document.createElement("canvas");
+  const square = createOcrCanvas();
   square.width = paddedSize;
   square.height = paddedSize;
-  const resized = document.createElement("canvas");
+  const resized = createOcrCanvas();
   resized.width = DETECTOR_SIZE;
   resized.height = DETECTOR_SIZE;
   try {
@@ -387,10 +381,8 @@ function detectorInput(source: HTMLCanvasElement): { tensor: ort.Tensor; paddedS
       paddedSize,
     };
   } finally {
-    square.width = 0;
-    square.height = 0;
-    resized.width = 0;
-    resized.height = 0;
+    releaseOcrCanvas(square);
+    releaseOcrCanvas(resized);
   }
 }
 
@@ -446,7 +438,7 @@ function decodeDetections(
 }
 
 async function detectOnCanvas(
-  source: HTMLCanvasElement,
+  source: OcrCanvas,
   models: LoadedModels,
   threshold: number,
   signal?: AbortSignal,
@@ -467,7 +459,7 @@ async function detectOnCanvas(
 }
 
 function recognizerInput(
-  source: HTMLCanvasElement,
+  source: OcrCanvas,
   region: OcrRegion,
   orientation: RecognitionOrientation = "auto",
   deskewAngle = 0,
@@ -475,11 +467,11 @@ function recognizerInput(
   const bounds = floorCeilCropRegion(region, { width: source.width, height: source.height });
   const cropWidth = Math.max(1, bounds.width);
   const cropHeight = Math.max(1, bounds.height);
-  const crop = document.createElement("canvas");
+  const crop = createOcrCanvas();
   crop.width = cropWidth;
   crop.height = cropHeight;
-  let line: HTMLCanvasElement | null = null;
-  const resized = document.createElement("canvas");
+  let line: OcrCanvas | null = null;
+  const resized = createOcrCanvas();
   resized.width = RECOGNIZER_WIDTH;
   resized.height = RECOGNIZER_HEIGHT;
   try {
@@ -520,17 +512,15 @@ function recognizerInput(
     }
     return new ort.Tensor("float32", data, [1, 3, RECOGNIZER_HEIGHT, RECOGNIZER_WIDTH]);
   } finally {
-    crop.width = 0;
-    crop.height = 0;
+    releaseOcrCanvas(crop);
     releasePreprocessedCanvas(line);
-    resized.width = 0;
-    resized.height = 0;
+    releaseOcrCanvas(resized);
   }
 }
 
-function lineCanvas(source: HTMLCanvasElement, region: OcrRegion): HTMLCanvasElement {
+function lineCanvas(source: OcrCanvas, region: OcrRegion): OcrCanvas {
   const bounds = floorCeilCropRegion(region, { width: source.width, height: source.height });
-  const canvas = document.createElement("canvas");
+  const canvas = createOcrCanvas();
   canvas.width = Math.max(1, bounds.width);
   canvas.height = Math.max(1, bounds.height);
   try {
@@ -551,8 +541,7 @@ function lineCanvas(source: HTMLCanvasElement, region: OcrRegion): HTMLCanvasEle
     );
     return canvas;
   } catch (error) {
-    canvas.width = 0;
-    canvas.height = 0;
+    releaseOcrCanvas(canvas);
     throw error;
   }
 }
@@ -568,7 +557,7 @@ function percentile(values: number[], fraction: number): number {
 }
 
 function inkProjection(
-  source: HTMLCanvasElement,
+  source: OcrCanvas,
   region: OcrRegion,
 ): { projection: number[]; transverseSize: number; longitudinalStep: number } | null {
   const bounds = floorCeilCropRegion(region, { width: source.width, height: source.height });
@@ -615,7 +604,7 @@ function inkProjection(
   };
 }
 
-function splitDetectionAtInkGap(source: HTMLCanvasElement, detection: Detection): Detection[] {
+function splitDetectionAtInkGap(source: OcrCanvas, detection: Detection): Detection[] {
   const vertical = detection.height >= detection.width;
   const longitudinalSize = vertical ? detection.height : detection.width;
   const transverseSize = Math.max(1, vertical ? detection.width : detection.height);
@@ -652,7 +641,7 @@ function splitDetectionAtInkGap(source: HTMLCanvasElement, detection: Detection)
   ];
 }
 
-function splitDetectionsAtInkGaps(source: HTMLCanvasElement, detections: Detection[]): Detection[] {
+function splitDetectionsAtInkGaps(source: OcrCanvas, detections: Detection[]): Detection[] {
   return detections.flatMap((detection) => splitDetectionAtInkGap(source, detection));
 }
 
@@ -671,12 +660,12 @@ export function decodeText(
 
 export function buildNdlOcrImageUrl(page: ViewerPage): string {
   return page.imageServiceId
-    ? `${page.imageServiceId.replace(/\/$/, "")}/full/2000,/0/default.jpg`
+    ? `${page.imageServiceId.replace(/\/$/, "")}/full/!2000,2000/0/default.jpg`
     : page.image;
 }
 
 async function recognizeCanvasLine(
-  source: HTMLCanvasElement,
+  source: OcrCanvas,
   region: OcrRegion,
   models: LoadedModels,
   orientation: RecognitionOrientation = "auto",
@@ -699,462 +688,211 @@ async function recognizeCanvasLine(
 export async function recognizePageWithNdlLite(
   page: ViewerPage,
   options: NdlOcrOptions = DEFAULT_NDL_OCR_OPTIONS,
-  onProgress: ProgressCallback,
+  onProgress: ProgressCallback = () => undefined,
   signal?: AbortSignal,
 ): Promise<NdlOcrResult> {
+  if (page.ocrAvailability === "unsupported") throw new OcrFailure(page.unsupportedReason ?? "Unsupported Canvas", "unsupported");
   const normalizedOptions = normalizeNdlOcrOptions(options);
   const startedAt = Date.now();
+  resetCanvasCounters();
   const stats: OcrRunStats = {
-    detectionCount: 0,
-    modelInferenceCount: 0,
-    adaptiveTiles: 0,
-    initialRecognitions: 0,
-    extraRecognitions: 0,
-    extraRecognitionAttempts: 0,
-    highResolutionRetries: 0,
-    additionalCropRequests: 0,
-    additionalCropFailures: 0,
-    maxCanvasPixels: 0,
-    durationMs: 0,
-  };
-  const recordCanvasPixels = (canvas: HTMLCanvasElement): void => {
-    stats.maxCanvasPixels = Math.max(stats.maxCanvasPixels, canvas.width * canvas.height);
-  };
-  const recognizeTracked = (
-    source: HTMLCanvasElement,
-    region: OcrRegion,
-    models: LoadedModels,
-    orientation: RecognitionOrientation,
-    deskewAngle: number,
-  ): Promise<DecodedRecognition> => {
-    stats.modelInferenceCount += 1;
-    return recognizeCanvasLine(source, region, models, orientation, deskewAngle, signal);
-  };
-  const beginExtraRecognition = (): boolean => {
-    if (stats.extraRecognitionAttempts >= normalizedOptions.maxExtraRecognitions) return false;
-    stats.extraRecognitionAttempts += 1;
-    onProgress({
-      stage: "retry",
-      percent: 72 + Math.round((stats.extraRecognitionAttempts / Math.max(1, normalizedOptions.maxExtraRecognitions)) * 20),
-      messageKey: "progressRetry",
-      params: { completed: stats.extraRecognitionAttempts, total: normalizedOptions.maxExtraRecognitions },
-      completed: stats.extraRecognitionAttempts,
-      total: normalizedOptions.maxExtraRecognitions,
-    });
-    return true;
+    detectionCount: 0, modelInferenceCount: 0, adaptiveTiles: 0, initialRecognitions: 0,
+    extraRecognitions: 0, extraRecognitionAttempts: 0, highResolutionRetries: 0,
+    additionalCropRequests: 0, additionalCropFailures: 0, maxCanvasPixels: 0, durationMs: 0,
+    imageRequests: 0, sourceTiles: 0, warnings: [],
   };
   clearNdlOcrModelReleaseTimer();
-  activeOcrRuns += 1;
-
+  if (releasePromise) await releasePromise;
+  if (activeOcrRuns > 0) throw new OcrFailure("Another OCR operation is still running", "worker");
+  const revision = ndlModelRevision(normalizedOptions.modelRevision);
+  if (modelPromise && loadedRevision !== revision) await releaseNdlOcrModels();
+  activeOcrRuns++;
+  let currentCanvas: OcrCanvas | null = null;
+  let currentSegment = -1;
+  const recordCanvas = (canvas: OcrCanvas) => { stats.maxCanvasPixels = Math.max(stats.maxCanvasPixels, canvas.width * canvas.height); };
   try {
     throwIfAborted(signal);
-    onProgress({ stage: "image", percent: 3, messageKey: "progressImage" });
-    const bitmap = await loadImage(buildNdlOcrImageUrl(page), signal);
-    let source: HTMLCanvasElement;
-    try {
+    onProgress({ stage: "image", percent: 2, messageKey: "progressImage" });
+    const source = await resolvePageImageSource(page, normalizedOptions, signal);
+    stats.warnings = source.warnings;
+    stats.sourceTiles = source.segments.length;
+    const getSegment = async (index: number): Promise<OcrCanvas> => {
+      if (currentSegment === index && currentCanvas) return currentCanvas;
+      releasePreprocessedCanvas(currentCanvas); currentCanvas = null; currentSegment = -1;
       throwIfAborted(signal);
-      source = imageBitmapCanvas(bitmap);
-      recordCanvasPixels(source);
-    } finally {
-      bitmap.close();
+      stats.imageRequests!++;
+      const bitmap = await loadImage(source.segments[index].url, signal, normalizedOptions.tileMaxSize);
+      try {
+        currentCanvas = imageBitmapCanvas(bitmap);
+        currentSegment = index;
+        recordCanvas(currentCanvas);
+        if (!source.info) {
+          const original = bitmapSourceSizes.get(bitmap)!;
+          source.width = original.width; source.height = original.height;
+          source.segments[index].region = { x: 0, y: 0, width: original.width, height: original.height };
+        }
+        return currentCanvas;
+      } finally { bitmap.close(); }
+    };
+    onProgress({ stage: "models", percent: 5, messageKey: "progressModels" });
+    let models: LoadedModels;
+    try { models = await getModels(revision, signal); }
+    catch (error) {
+      throwIfAborted(signal);
+      throw new OcrFailure(`OCR model initialization failed: ${String(error)}`, "model");
     }
-
-    try {
-      onProgress({ stage: "models", percent: 8, messageKey: "progressModels" });
-      const models = await getModels(signal);
+    const threshold = detectionThresholdForProfile(normalizedOptions.profile);
+    const detected: Array<Detection & { sourceTile: number }> = [];
+    for (let index = 0; index < source.segments.length; index++) {
       throwIfAborted(signal);
-
-      onProgress({ stage: "detect", percent: 22, messageKey: "progressDetect" });
-      const detectionThreshold = detectionThresholdForProfile(normalizedOptions.profile);
-      let detections = splitDetectionsAtInkGaps(
-        source,
-        mergeAdjacentDetections(
-          await detectOnCanvas(source, models, detectionThreshold, signal, () => { stats.modelInferenceCount += 1; }),
-          { orientation: normalizedOptions.writingMode, maxGapRatio: 1.2, transverseOverlapThreshold: 0.65 },
-        ),
-      );
-
-      if (normalizedOptions.enableAdaptiveTiling && normalizedOptions.profile !== "fast") {
-        const suspiciousRegions = estimateUncoveredInkRegions(source, detections);
-        const tiles = createAdaptiveTiles(
-          { width: source.width, height: source.height },
-          normalizedOptions.profile,
-          suspiciousRegions,
-        );
-        stats.adaptiveTiles = tiles.length;
+      const canvas = await getSegment(index);
+      onProgress({ stage: "detect", percent: 10 + Math.round(index / source.segments.length * 20), messageKey: "progressDetect" });
+      let local = await detectOnCanvas(canvas, models, threshold, signal, () => { stats.modelInferenceCount++; });
+      if (normalizedOptions.enableAdaptiveTiling) {
+        const tiles = createAdaptiveTiles(canvas, normalizedOptions.profile, estimateUncoveredInkRegions(canvas, local));
         for (const tile of tiles) {
           throwIfAborted(signal);
-          const tileSource = lineCanvas(source, tile);
-          recordCanvasPixels(tileSource);
+          const crop = lineCanvas(canvas, tile);
           try {
-            const localDetections = await detectOnCanvas(
-              tileSource,
-              models,
-              detectionThreshold,
-              signal,
-              () => { stats.modelInferenceCount += 1; },
-            );
-            detections.push(...localDetections.map((detection) => ({
-              ...restoreTileRegion(tile, detection, { width: source.width, height: source.height }),
-              detectionScore: detection.detectionScore,
-            })));
-          } finally {
-            tileSource.width = 0;
-            tileSource.height = 0;
-          }
-        }
-        detections = splitDetectionsAtInkGaps(
-          source,
-          mergeAdjacentDetections(
-            globalNms(detections),
-            { orientation: normalizedOptions.writingMode, maxGapRatio: 1.2, transverseOverlapThreshold: 0.65 },
-          ),
-        );
-      }
-
-      let paperMask: PaperMaskResult = { regions: [], confidence: 0 };
-      if (normalizedOptions.paperFilter === "soft") {
-        try {
-          paperMask = estimatePaperMask(source);
-          detections = detections.map((detection) => ({
-            ...detection,
-            paperScore: paperScoreForRegion(detection, paperMask),
-          }));
-        } catch (error) {
-          console.warn("NDL OCR paper-mask estimation failed; continuing without paper scores.", error);
+            const extra = await detectOnCanvas(crop, models, threshold, signal, () => { stats.modelInferenceCount++; });
+            local.push(...extra.map((detection) => ({ ...restoreTileRegion(tile, detection, canvas), detectionScore: detection.detectionScore })));
+            stats.adaptiveTiles++;
+          } finally { releasePreprocessedCanvas(crop); }
         }
       }
-
+      local = splitDetectionsAtInkGaps(canvas, mergeAdjacentDetections(globalNms(local), {
+        orientation: normalizedOptions.writingMode, maxGapRatio: 1.2, transverseOverlapThreshold: 0.65,
+      }));
+      detected.push(...local.map((detection) => ({ ...toSourceRegion(detection, source.segments[index].region, canvas), sourceTile: index, detectionScore: detection.detectionScore })));
+      await nextFrame();
+    }
+    const detections = mergeSourceDetections(detected, normalizedOptions.writingMode);
+    // Reuse one tile at a time; reading order is assigned after recognition.
+    const containingTile = (box: Detection) => source.segments.findIndex(({ region }) => box.x >= region.x && box.y >= region.y && box.x + box.width <= region.x + region.width && box.y + box.height <= region.y + region.height);
+    detections.sort((a, b) => containingTile(a) - containingTile(b));
+    stats.detectionCount = detections.length;
+    const candidates: RecognitionCandidate[][] = [];
+    const retryTargets: RetryTarget[] = [];
+    const contains = (outer: OcrRegion, inner: OcrRegion) => inner.x >= outer.x - 0.01 && inner.y >= outer.y - 0.01
+      && inner.x + inner.width <= outer.x + outer.width + 0.01 && inner.y + inner.height <= outer.y + outer.height + 0.01;
+    const cropInputs = new WeakMap<OcrCanvas, RecognitionCandidate["input"]>();
+    const getCrop = async (detection: Detection, padded: boolean, highResolution = false): Promise<OcrCanvas> => {
+      const bounds = padded ? expandCropRegion(detection, DEFAULT_CROP_PADDING, source, detections) : detection;
+      const index = source.segments.findIndex((segment) => contains(segment.region, bounds));
+      const url = sourceRegionUrl(source, bounds, 1024);
+      if ((highResolution || index < 0) && url) {
+        stats.additionalCropRequests++; stats.imageRequests!++;
+        const bitmap = await loadImage(url, signal, 1024);
+        try { const crop = imageBitmapCanvas(bitmap); recordCanvas(crop); cropInputs.set(crop, { imageUrl: url, sourceRegion: bounds, width: crop.width, height: crop.height }); return crop; }
+        finally { bitmap.close(); }
+      }
+      if (index < 0) throw new OcrFailure("A line crosses unavailable source image regions", "image");
+      const canvas = await getSegment(index);
+      const crop = lineCanvas(canvas, toSegmentRegion(bounds, source.segments[index].region, canvas));
+      recordCanvas(crop);
+      cropInputs.set(crop, { imageUrl: source.segments[index].url, sourceRegion: bounds, width: crop.width, height: crop.height });
+      return crop;
+    };
+    const recognize = (crop: OcrCanvas, orientation: RecognitionOrientation = "auto", angle = 0) => {
+      stats.modelInferenceCount++;
+      return recognizeCanvasLine(crop, { x: 0, y: 0, width: crop.width, height: crop.height }, models, orientation, angle, signal);
+    };
+    // First complete every original line, so the retry budget is not consumed by the first detection.
+    for (let index = 0; index < detections.length; index++) {
       throwIfAborted(signal);
-      if (!detections.length) throw new LocalizedError("errorNoLines");
-      stats.detectionCount = detections.length;
-
-      const lines: OcrLine[] = [];
-      for (let index = 0; index < detections.length; index += 1) {
-        throwIfAborted(signal);
-        const detection = detections[index];
-        if (
-          index === 0
-          || (index + 1) % OCR_UI_YIELD_INTERVAL === 0
-          || index === detections.length - 1
-        ) {
-          onProgress({
-            stage: "recognize",
-            percent: 28 + Math.round(((index + 1) / detections.length) * 68),
-            messageKey: "progressRecognize",
-            params: { completed: index + 1, total: detections.length },
-            completed: index + 1,
-            total: detections.length,
-          });
-        }
-        const original = await recognizeTracked(source, detection, models, "auto", 0);
-        stats.initialRecognitions += 1;
-        if (
-          normalizedOptions.paperFilter === "soft"
-          && shouldSuppressSoftPaperCandidate(detection, paperMask, original.text, original.recognitionScore)
-        ) {
+      const detection = detections[index];
+      const crop = await getCrop(detection, false);
+      try {
+        const original = await recognize(crop);
+        stats.initialRecognitions++;
+        candidates.push([recognitionCandidateFromDecoded(original, { source: "page", preprocessing: "original", orientation: "auto", order: 0, input: cropInputs.get(crop) })]);
+        retryTargets.push({ index, score: original.recognitionScore,
+          lowConfidence: isRecognitionLowConfidence(original, detection, normalizedOptions.profile),
+          shortSide: Math.min(crop.width, crop.height), aspectRatio: Math.max(crop.width, crop.height) / Math.max(1, Math.min(crop.width, crop.height)),
+          quality: measureImageQuality(crop),
+        });
+      } finally { releasePreprocessedCanvas(crop); }
+      onProgress({ stage: "recognize", percent: 30 + Math.round((index + 1) / Math.max(1, detections.length) * 45),
+        messageKey: "progressRecognize", params: { completed: index + 1, total: detections.length }, completed: index + 1, total: detections.length });
+      await nextFrame();
+    }
+    const retries = scheduleRetries(retryTargets, normalizedOptions, Boolean(source.info?.region && source.info.resize));
+    for (const retry of retries) {
+      throwIfAborted(signal);
+      if (stats.extraRecognitionAttempts >= normalizedOptions.maxExtraRecognitions) break;
+      const detection = detections[retry.index];
+      let crop: OcrCanvas | null = null, processed: OcrCanvas | null = null;
+      try {
+        // Segmentation consumes one inference per window, never more than the page budget.
+        if (retry.kind === "segmented") {
+          const remaining = normalizedOptions.maxExtraRecognitions - stats.extraRecognitionAttempts;
+          const windows = createLineWindows(detection, source, { maxWindows: Math.min(4, remaining) });
+          if (windows.length < 2 || windows.length > remaining) continue;
+          const parts: DecodedRecognition[] = [];
+          for (const window of windows) {
+            stats.extraRecognitionAttempts++;
+            crop = await getCrop({ ...window, detectionScore: detection.detectionScore }, false);
+            try { parts.push(await recognize(crop)); stats.extraRecognitions++; }
+            finally { releasePreprocessedCanvas(crop); crop = null; }
+          }
+          const combined = combineSegmentRecognitions(parts);
+          if (combined) candidates[retry.index].push({ ...combined, source: "segmented", preprocessing: "original", order: candidates[retry.index].length });
           continue;
         }
-        const candidates: RecognitionCandidate[] = [
-          recognitionCandidateFromDecoded(original, {
-            source: "page",
-            preprocessing: "original",
-            order: 0,
-            orientation: "auto",
-          }),
-        ];
-
-        const originalLowConfidence = isRecognitionLowConfidence(original, detection, normalizedOptions.profile);
-        const shortSide = Math.max(1, Math.min(detection.width, detection.height));
-        const longSide = Math.max(detection.width, detection.height);
-        const shouldTryDirection = originalLowConfidence
-          && (longSide / shortSide < 1.8 || normalizedOptions.profile === "accurate");
-
-        if (shouldTryDirection && beginExtraRecognition()) {
-          try {
-            const orientation: RecognitionOrientation = detection.height > detection.width ? "normal" : "rotate-90";
-            const direction = await recognizeTracked(source, detection, models, orientation, 0);
-            stats.extraRecognitions += 1;
-            candidates.push(recognitionCandidateFromDecoded(direction, {
-              source: "page",
-              preprocessing: "original",
-              orientation,
-              order: candidates.length,
-            }));
-          } catch (error) {
-            if (signal?.aborted) throw new DOMException("ocrCancelled", "AbortError");
-            console.warn("NDL OCR direction retry failed; keeping the original candidate.", error);
-          }
-        }
-
-        if (originalLowConfidence && beginExtraRecognition()) {
-          throwIfAborted(signal);
-          const paddedRegion = expandCropRegion(
-            detection,
-            DEFAULT_CROP_PADDING,
-            { width: source.width, height: source.height },
-            detections,
-          );
-          let padded: DecodedRecognition | null = null;
-          try {
-            padded = await recognizeTracked(source, paddedRegion, models, "auto", 0);
-            stats.extraRecognitions += 1;
-            candidates.push(recognitionCandidateFromDecoded(padded, {
-              source: "page",
-              preprocessing: "padded",
-              orientation: "auto",
-              order: candidates.length,
-            }));
-          } catch (error) {
-            if (signal?.aborted) throw new DOMException("ocrCancelled", "AbortError");
-            console.warn("NDL OCR padded retry failed; keeping the original candidate.", error);
-          }
-
-          if (
-            padded
-            && normalizedOptions.enableHighResolutionRetry
-            && isRecognitionLowConfidence(padded, detection, normalizedOptions.profile)
-            && stats.extraRecognitionAttempts < normalizedOptions.maxExtraRecognitions
-          ) {
-            const cropUrl = buildLineCropUrl(
-              page,
-              { width: source.width, height: source.height },
-              detection,
-              DEFAULT_CROP_PADDING,
-              1024,
-              detections,
-            );
-            if (cropUrl && beginExtraRecognition()) {
-              stats.additionalCropRequests += 1;
-              try {
-                throwIfAborted(signal);
-                const cropBitmap = await loadImage(cropUrl, signal);
-                let cropCanvas: HTMLCanvasElement | null = null;
-                try {
-                  throwIfAborted(signal);
-                  cropCanvas = imageBitmapCanvas(cropBitmap);
-                  recordCanvasPixels(cropCanvas);
-                  const highResolution = await recognizeTracked(
-                    cropCanvas,
-                    { x: 0, y: 0, width: cropCanvas.width, height: cropCanvas.height },
-                    models,
-                    "auto",
-                    0,
-                  );
-                  stats.extraRecognitions += 1;
-                  stats.highResolutionRetries += 1;
-                  candidates.push(recognitionCandidateFromDecoded(highResolution, {
-                    source: "iiif-crop",
-                    preprocessing: "high-resolution-original",
-                    orientation: "auto",
-                    order: candidates.length,
-                  }));
-                } finally {
-                  if (cropCanvas) {
-                    cropCanvas.width = 0;
-                    cropCanvas.height = 0;
-                  }
-                  cropBitmap.close();
-                }
-              } catch (error) {
-                if (signal?.aborted) throw new DOMException("ocrCancelled", "AbortError");
-                stats.additionalCropFailures += 1;
-                console.warn("NDL OCR high-resolution crop failed; keeping page candidates.", error);
-              }
-            }
-          }
-
-          if (
-            padded
-            && normalizedOptions.enableDeskewRetry
-            && isRecognitionLowConfidence(padded, detection, normalizedOptions.profile)
-            && stats.extraRecognitionAttempts < normalizedOptions.maxExtraRecognitions
-          ) {
-            let sourceCrop: HTMLCanvasElement | null = null;
-            try {
-              sourceCrop = lineCanvas(source, paddedRegion);
-              const angle = rankDeskewAngles(sourceCrop, "auto")
-                .find((candidate) => Math.abs(candidate) >= 0.001);
-              if (angle !== undefined && beginExtraRecognition()) {
-                const deskewed = await recognizeTracked(source, detection, models, "auto", angle);
-                stats.extraRecognitions += 1;
-                candidates.push(recognitionCandidateFromDecoded(deskewed, {
-                  source: "page",
-                  preprocessing: "original",
-                  orientation: "auto",
-                  deskewAngle: angle,
-                  order: candidates.length,
-                }));
-              }
-            } catch (error) {
-              if (signal?.aborted) throw new DOMException("ocrCancelled", "AbortError");
-              console.warn("NDL OCR deskew retry failed; keeping existing candidates.", error);
-            } finally {
-              if (sourceCrop) {
-                sourceCrop.width = 0;
-                sourceCrop.height = 0;
-              }
-            }
-          }
-
-          if (
-            padded
-            && normalizedOptions.profile === "accurate"
-            && isRecognitionLowConfidence(padded, detection, normalizedOptions.profile)
-            && stats.extraRecognitionAttempts < normalizedOptions.maxExtraRecognitions
-          ) {
-            const preprocessingCandidates = [
-              "grayscale-contrast",
-              "background-normalized",
-              "ink-channel",
-              "adaptive-binary",
-            ] as const;
-            for (const preprocessing of preprocessingCandidates) {
-              if (!beginExtraRecognition()) break;
-              throwIfAborted(signal);
-              let sourceCrop: HTMLCanvasElement | null = null;
-              let processed: HTMLCanvasElement | null = null;
-              try {
-                sourceCrop = lineCanvas(source, paddedRegion);
-                recordCanvasPixels(sourceCrop);
-                processed = preprocessCanvas(sourceCrop, preprocessing);
-                recordCanvasPixels(processed);
-                const decoded = await recognizeTracked(
-                  processed,
-                  { x: 0, y: 0, width: processed.width, height: processed.height },
-                  models,
-                  "auto",
-                  0,
-                );
-                stats.extraRecognitions += 1;
-                candidates.push(recognitionCandidateFromDecoded(decoded, {
-                  source: "page",
-                  preprocessing,
-                  orientation: "auto",
-                  order: candidates.length,
-                }));
-              } catch (error) {
-                if (signal?.aborted) throw new DOMException("ocrCancelled", "AbortError");
-                console.warn(`NDL OCR ${preprocessing} retry failed; keeping existing candidates.`, error);
-              } finally {
-                if (sourceCrop) {
-                  sourceCrop.width = 0;
-                  sourceCrop.height = 0;
-                }
-                releasePreprocessedCanvas(processed);
-              }
-            }
-          }
-        }
-
-        if (
-          normalizedOptions.enableLongLineSegmentation
-          && (originalLowConfidence || normalizedOptions.profile === "accurate")
-          && stats.extraRecognitionAttempts < normalizedOptions.maxExtraRecognitions
-        ) {
-          const remaining = normalizedOptions.maxExtraRecognitions - stats.extraRecognitionAttempts;
-          const windows = createLineWindows(
-            detection,
-            { width: source.width, height: source.height },
-            { maxWindows: Math.min(4, remaining) },
-          );
-          if (windows.length > 1 && windows.length <= remaining) {
-            const segments: Array<{
-              text: string;
-              recognitionScore: number;
-              minimumTokenScore: number;
-              meanTokenMargin: number;
-              endedWithEos: boolean;
-            }> = [];
-            let segmentationComplete = true;
-            for (const window of windows) {
-              if (!beginExtraRecognition()) {
-                segmentationComplete = false;
-                break;
-              }
-              throwIfAborted(signal);
-              try {
-                segments.push(await recognizeTracked(source, window, models, "auto", 0));
-                stats.extraRecognitions += 1;
-              } catch (error) {
-                if (signal?.aborted) throw new DOMException("ocrCancelled", "AbortError");
-                segmentationComplete = false;
-                console.warn("NDL OCR long-line segment retry failed; keeping the full-line candidate.", error);
-                break;
-              }
-            }
-            const segmented = segmentationComplete && segments.length === windows.length
-              ? combineSegmentRecognitions(segments)
-              : null;
-            if (segmented) {
-              candidates.push({
-                ...segmented,
-                source: "segmented",
-                preprocessing: "original",
-                order: candidates.length,
-              });
-            }
-          }
-        }
-
-        const selection = selectRecognitionCandidate(candidates);
-        lines.push({
-          text: selection.selected.text,
-          id: `line-${index}`,
-          detectionScore: detection.detectionScore,
-          detectionIndex: index,
-          recognitionScore: selection.selected.recognitionScore,
-          minimumTokenScore: selection.selected.minimumTokenScore,
-          meanTokenMargin: selection.selected.meanTokenMargin,
-          eosScore: selection.selected.eosScore,
-          endedWithEos: selection.selected.endedWithEos,
-          source: selection.selected.source,
-          preprocessing: selection.selected.preprocessing,
-          orientation: selection.selected.orientation,
-          deskewAngle: selection.selected.deskewAngle,
-          paperScore: detection.paperScore,
-          alternatives: selection.alternatives,
-          uncertain: selection.uncertain,
-          selectionReason: selection.reason,
-          region: { x: detection.x, y: detection.y, width: detection.width, height: detection.height },
-        });
-        if ((index + 1) % OCR_UI_YIELD_INTERVAL === 0 || index === detections.length - 1) {
-          await nextFrame();
-        }
-      }
-
-      const imageWidth = source.width;
-      const imageHeight = source.height;
-      const orderedLines = orderOcrLines(lines, {
-        writingMode: normalizedOptions.writingMode,
-        scattered: normalizedOptions.scattered,
-      });
-      stats.durationMs = Date.now() - startedAt;
-      onProgress({
-        stage: "done",
-        percent: 100,
-        messageKey: "progressDone",
-        params: { count: lines.length },
-        completed: lines.length,
-        total: lines.length,
-      });
-      return {
-        imageWidth,
-        imageHeight,
-        lines: orderedLines,
-        provider: models.provider,
-        revision: NDL_MODEL_REF,
-        pipelineVersion: OCR_PIPELINE_VERSION,
-        profile: normalizedOptions.profile,
-        options: normalizedOptions,
-        stats,
-      };
-    } finally {
-      source.width = 0;
-      source.height = 0;
+        stats.extraRecognitionAttempts++;
+        const correction = ["background-normalized", "grayscale-contrast", "sauvola", "adaptive-binary"].includes(retry.kind);
+        crop = await getCrop(detection, !correction && retry.kind !== "direction", retry.kind === "high-resolution");
+        if (correction) processed = preprocessCanvas(crop, retry.kind as "sauvola");
+        const orientation: RecognitionOrientation = retry.kind === "direction" ? (crop.height > crop.width ? "normal" : "rotate-90") : "auto";
+        const angle = retry.kind === "deskew" ? rankDeskewAngles(crop)[0] ?? 0 : 0;
+        const decoded = await recognize(processed ?? crop, orientation, angle);
+        stats.extraRecognitions++;
+        if (retry.kind === "high-resolution") stats.highResolutionRetries++;
+        candidates[retry.index].push(recognitionCandidateFromDecoded(decoded, {
+          source: retry.kind === "high-resolution" ? "iiif-crop" : "page",
+          preprocessing: correction ? retry.kind as "sauvola" : retry.kind === "high-resolution" ? "high-resolution-padded" : retry.kind === "padded" ? "padded" : "original",
+          input: { ...cropInputs.get(crop)!, parameters: retry.kind === "sauvola" ? { radius: 12, k: 0.2, R: 128 }
+            : retry.kind === "grayscale-contrast" ? { lowPercentile: 0.02, highPercentile: 0.98, strength: 0.5 }
+            : retry.kind === "background-normalized" ? { radius: Math.max(8, Math.round(Math.min(crop.width, crop.height) * 0.75)), denominatorFloor: 32 }
+            : retry.kind === "adaptive-binary" ? { radius: Math.max(2, Math.round(Math.min(crop.width, crop.height) * 0.035)), meanFactor: 0.9 }
+            : { longitudinalPadding: retry.kind === "direction" ? 0 : DEFAULT_CROP_PADDING.longitudinalRatio, transversePadding: retry.kind === "direction" ? 0 : DEFAULT_CROP_PADDING.transverseRatio } },
+          orientation, deskewAngle: angle, order: candidates[retry.index].length,
+        }));
+      } catch (error) {
+        throwIfAborted(signal);
+        // Session failures are fatal; failed optional image requests retain the original.
+        if (!(error instanceof OcrFailure) || error.kind !== "image") throw error;
+        stats.additionalCropFailures++;
+        stats.warnings!.push(`Optional crop failed for line ${retry.index + 1}: ${error.message}`);
+      } finally { releasePreprocessedCanvas(processed); releasePreprocessedCanvas(crop); }
+      onProgress({ stage: "retry", percent: 76 + Math.round(stats.extraRecognitionAttempts / Math.max(1, normalizedOptions.maxExtraRecognitions) * 20),
+        messageKey: "progressRetry", params: { completed: stats.extraRecognitionAttempts, total: normalizedOptions.maxExtraRecognitions },
+        completed: stats.extraRecognitionAttempts, total: normalizedOptions.maxExtraRecognitions });
+      await nextFrame();
     }
+    const lines = candidates.map((items, index): OcrLine => {
+      const selection = selectRecognitionCandidate(items);
+      // An explicit benchmark candidate is exposed for comparison, never auto-adopted.
+      const selected = normalizedOptions.benchmarkPreprocessing ? items[0] : selection.selected;
+      const { order: _order, ...value } = selected;
+      return { ...value, id: `line-${index}`, detectionIndex: index, detectionScore: detections[index].detectionScore,
+        region: { x: detections[index].x, y: detections[index].y, width: detections[index].width, height: detections[index].height },
+        alternatives: items.filter((item) => item !== selected).map(({ order: _order, ...item }) => item),
+        uncertain: selection.uncertain || retryTargets[index].lowConfidence,
+        selectionReason: normalizedOptions.benchmarkPreprocessing ? "evaluation-only" : selection.reason,
+      };
+    });
+    const orderedLines = orderOcrLines(lines, { writingMode: normalizedOptions.writingMode, scattered: normalizedOptions.scattered });
+    stats.durationMs = Date.now() - startedAt;
+    onProgress({ stage: "done", percent: 100, messageKey: "progressDone", params: { count: lines.length }, completed: lines.length, total: lines.length });
+    return { imageWidth: source.width, imageHeight: source.height, lines: orderedLines, provider: models.provider,
+      revision: models.revision, pipelineVersion: OCR_PIPELINE_VERSION, profile: normalizedOptions.profile, options: normalizedOptions, stats };
   } finally {
-    activeOcrRuns -= 1;
+    releasePreprocessedCanvas(currentCanvas);
+    stats.maxCanvasPixels = Math.max(stats.maxCanvasPixels, canvasCounters().maxPixels);
+    stats.maxLiveCanvases = canvasCounters().peak;
+    stats.liveCanvasesAfterPage = canvasCounters().live;
+    activeOcrRuns--;
     if (activeOcrRuns === 0) scheduleNdlOcrModelRelease();
   }
 }

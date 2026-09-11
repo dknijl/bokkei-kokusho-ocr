@@ -117,10 +117,12 @@ function areAdjacent(
   );
   const firstTransverseSize = firstTransverseEnd - firstTransverseStart;
   const secondTransverseSize = secondTransverseEnd - secondTransverseStart;
-  const smallerTransverseSize = Math.min(firstTransverseSize, secondTransverseSize);
+  // Both boxes must cover the same writing lane. Containment of a narrow note
+  // in a much wider body line is not evidence that they form one line.
+  const largerTransverseSize = Math.max(firstTransverseSize, secondTransverseSize);
   if (
-    smallerTransverseSize <= 0
-    || transverseOverlap / smallerTransverseSize < options.transverseOverlapThreshold
+    Math.min(firstTransverseSize, secondTransverseSize) <= 0
+    || transverseOverlap / largerTransverseSize < options.transverseOverlapThreshold
   ) return false;
 
   const firstLongitudinalStart = orientation === "vertical" ? first.y : first.x;

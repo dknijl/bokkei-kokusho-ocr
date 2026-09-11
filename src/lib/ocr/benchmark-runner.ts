@@ -42,14 +42,17 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 export function viewerPageFromGroundTruth(page: OcrGroundTruthPage): ViewerPage {
   const image = page.imageServiceId
-    ? `${page.imageServiceId.replace(/\/$/, "")}/full/2000,/0/default.jpg`
-    : "";
+    ? `${page.imageServiceId.replace(/\/$/, "")}/full/full/0/default.jpg`
+    : page.imageUrl ?? "";
   return {
     canvasId: page.canvasId,
     imageServiceId: page.imageServiceId,
     label: page.id,
     labelTranslations: { none: page.id },
     image,
+    sourceImage: image,
+    sourceWidth: page.width,
+    sourceHeight: page.height,
     thumbnail: image,
     width: page.width,
     height: page.height,
@@ -75,6 +78,8 @@ export async function runOcrBenchmarkDataset(
     throwIfAborted(options.signal);
     const resultPage: ViewerPage = {
       ...page,
+      width: result.imageWidth,
+      height: result.imageHeight,
       result: result.lines,
       ocrProvider: result.provider,
       ocrModelRevision: result.revision,

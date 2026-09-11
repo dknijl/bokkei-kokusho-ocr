@@ -73,6 +73,8 @@ export function applyOcrResult(options: {
   targetPage.ocrPipelineVersion = result.pipelineVersion;
   targetPage.ocrImageWidth = result.imageWidth;
   targetPage.ocrImageHeight = result.imageHeight;
+  targetPage.sourceWidth = result.imageWidth;
+  targetPage.sourceHeight = result.imageHeight;
   targetPage.ocrProfile = result.profile;
   targetPage.ocrOptions = result.options;
   targetPage.ocrStats = result.stats;

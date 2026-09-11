@@ -55,6 +55,8 @@ function sitesWorker(): Plugin {
 
 export default defineConfig({
   base: "/ocr/",
+  server: { hmr: process.env.OCR_EVALUATION ? false : undefined },
+  worker: { format: "es" },
   plugins: [svelte(), sitesWorker(), sites()],
   build: {
     outDir: "dist/client",

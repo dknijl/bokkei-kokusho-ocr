@@ -7,8 +7,8 @@ import {
 import { evaluateOcrPage, type OcrGroundTruthPage, type OcrPageMetrics } from "./metrics.ts";
 import type { OcrLine, OcrRunStats } from "./types.ts";
 
-export const OCR_BENCHMARK_SCHEMA_VERSION = 2;
-export const OCR_PIPELINE_VERSION = "frontend-ocr-accuracy-phase-9-3";
+export const OCR_BENCHMARK_SCHEMA_VERSION = 3;
+export const OCR_PIPELINE_VERSION = "frontend-ocr-source-worker-v2";
 
 export type OcrBenchmarkRecord = {
   schemaVersion: number;
@@ -46,6 +46,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function parseOcrGroundTruthJson(value: string): OcrGroundTruthPage {
   const parsed: unknown = JSON.parse(value);
   if (!isRecord(parsed)) throw new Error("Ground truth must be a JSON object.");
+  if (![parsed.width, parsed.height].every(value => typeof value === "number" && Number.isFinite(value) && value > 0)) throw new Error("Ground truth requires positive image dimensions.");
   const lines = parsed.lines;
   if (!Array.isArray(lines)) throw new Error("Ground truth lines must be an array.");
   if (typeof parsed.id !== "string" || typeof parsed.manifestUrl !== "string" || typeof parsed.canvasId !== "string") {
@@ -61,7 +62,9 @@ export function parseOcrGroundTruthJson(value: string): OcrGroundTruthPage {
       || typeof region.y !== "number"
       || typeof region.width !== "number"
       || typeof region.height !== "number"
-    ) throw new Error("Ground truth regions require numeric x, y, width, and height.");
+      || ![region.x, region.y, region.width, region.height].every(Number.isFinite)
+      || (region.x as number) < 0 || (region.y as number) < 0 || (region.width as number) <= 0 || (region.height as number) <= 0
+    ) throw new Error("Ground truth regions require finite, positive bounds.");
     return {
       text: line.text,
       ...(typeof line.normalizedText === "string" ? { normalizedText: line.normalizedText } : {}),
@@ -79,7 +82,14 @@ export function parseOcrGroundTruthJson(value: string): OcrGroundTruthPage {
     width: typeof parsed.width === "number" ? parsed.width : 0,
     height: typeof parsed.height === "number" ? parsed.height : 0,
     lines: parsedLines,
+    ...(parsed.annotationCoverage === "complete" || parsed.annotationCoverage === "partial" ? { annotationCoverage: parsed.annotationCoverage } : {}),
+    ...(typeof parsed.imageUrl === "string" ? { imageUrl: parsed.imageUrl } : {}),
     tags: tags as OcrGroundTruthPage["tags"],
+    ...(typeof parsed.bookId === "string" ? { bookId: parsed.bookId } : {}),
+    ...(parsed.split === "calibration" || parsed.split === "evaluation" ? { split: parsed.split } : {}),
+    ...(parsed.trainingOverlap === "known" || parsed.trainingOverlap === "unknown" || parsed.trainingOverlap === "excluded" ? { trainingOverlap: parsed.trainingOverlap } : {}),
+    ...(typeof parsed.sourceCitation === "string" ? { sourceCitation: parsed.sourceCitation } : {}),
+    ...(Array.isArray(parsed.nonTextRegions) ? { nonTextRegions: parsed.nonTextRegions.filter((region) => isRecord(region) && ["x", "y", "width", "height"].every((key) => typeof region[key] === "number" && Number.isFinite(region[key]))) as OcrGroundTruthPage["nonTextRegions"] } : {}),
   };
 }
 
@@ -108,6 +118,7 @@ export function ocrLinesFingerprint(lines: OcrLine[]): string {
     uncertain: line.uncertain ?? false,
     selectionReason: line.selectionReason ?? null,
     alternatives: line.alternatives ?? [],
+    input: line.input,
   })));
 }
 
@@ -175,9 +186,17 @@ export function createOcrBenchmarkRecord(options: {
 }): OcrBenchmarkRecord {
   const ocrOptions = options.ocrOptions
     ?? normalizeNdlOcrOptions({ profile: options.profile ?? "balanced" });
+  if (options.groundTruth && (options.groundTruth.canvasId !== options.page.canvasId || options.groundTruth.manifestUrl !== options.manifestUrl)) {
+    throw new Error("The ground truth belongs to a different Manifest or Canvas.");
+  }
   const metrics = options.groundTruth
     ? evaluateOcrPage({
-        predicted: options.page.result,
+        predicted: options.page.result.map((line) => ({ ...line, ...(line.region ? { region: {
+          x: line.region.x * options.groundTruth!.width / options.page.width,
+          y: line.region.y * options.groundTruth!.height / options.page.height,
+          width: line.region.width * options.groundTruth!.width / options.page.width,
+          height: line.region.height * options.groundTruth!.height / options.page.height,
+        } } : {}) })),
         reference: options.groundTruth,
         normalizedText: options.normalizedText
           ?? (options.groundTruth.lines.some((line) => line.normalizedText !== undefined) ? (value) => value : undefined),
@@ -260,6 +279,9 @@ export function serializeBenchmarkCsv(record: OcrBenchmarkRecord): string {
       "readingOrderAccuracy",
       "emptyRate",
       "lowConfidenceErrorDetectionRate",
+      "rawPageCer", "normalizedCer", "normalizedPageCer", "insertions", "deletions", "substitutions",
+      "insertionRate", "deletionRate", "nonTextFalsePositives", "durationMs", "extraRecognitions", "imageRequests", "sourceTiles",
+      "annotationCoverage", "trainingOverlap",
     ],
     ...record.output.lines.map((line, index) => [
       record.schemaVersion,
@@ -296,6 +318,11 @@ export function serializeBenchmarkCsv(record: OcrBenchmarkRecord): string {
       record.metrics?.readingOrderAccuracy ?? "",
       record.metrics?.emptyRate ?? "",
       record.metrics?.lowConfidenceErrorDetectionRate ?? "",
+      record.metrics?.pageCer ?? "", record.metrics?.normalized?.cer ?? "", record.metrics?.normalizedPageCer ?? "",
+      record.metrics?.pageErrors.insertions ?? "", record.metrics?.pageErrors.deletions ?? "", record.metrics?.pageErrors.substitutions ?? "",
+      record.metrics?.insertionRate ?? "", record.metrics?.deletionRate ?? "", record.metrics?.nonTextFalsePositives ?? "",
+      record.execution.stats?.durationMs ?? "", record.execution.stats?.extraRecognitions ?? "", record.execution.stats?.imageRequests ?? "", record.execution.stats?.sourceTiles ?? "",
+      record.groundTruth?.annotationCoverage ?? "unknown", record.groundTruth?.trainingOverlap ?? "unknown",
     ]),
   ];
   return `${rows.map((row) => row.map(escape).join(",")).join("\n")}\n`;

@@ -19,7 +19,7 @@ export type RecognitionSelectionComparison = {
 
 export function recognitionCandidateFromDecoded(
   decoded: DecodedRecognition,
-  metadata: Pick<RecognitionCandidate, "source" | "preprocessing" | "order" | "orientation" | "deskewAngle">,
+  metadata: Pick<RecognitionCandidate, "source" | "preprocessing" | "order" | "orientation" | "deskewAngle" | "input">,
 ): RecognitionCandidate {
   return {
     text: decoded.text,
@@ -33,6 +33,7 @@ export function recognitionCandidateFromDecoded(
     order: metadata.order,
     ...(metadata.orientation ? { orientation: metadata.orientation } : {}),
     ...(metadata.deskewAngle === undefined ? {} : { deskewAngle: metadata.deskewAngle }),
+    ...(metadata.input ? { input: metadata.input } : {}),
   };
 }
 
@@ -77,7 +78,10 @@ export function selectRecognitionCandidate(
 
   const distinctPreprocessings = (cluster: RecognitionCandidate[]) =>
     new Set(cluster.map((candidate) =>
-      `${candidate.source}:${candidate.preprocessing}:${candidate.orientation ?? "auto"}:${candidate.deskewAngle ?? 0}`,
+      ["padded", "high-resolution-padded"].includes(candidate.preprocessing) ? "padding"
+        : candidate.source === "iiif-crop" ? "high-resolution"
+        : candidate.preprocessing === "original" ? "original-pixels"
+        : ["sauvola", "adaptive-binary"].includes(candidate.preprocessing) ? "binary" : "tone",
     )).size;
   const bestInCluster = (cluster: RecognitionCandidate[]) => cluster
     .slice()
@@ -95,8 +99,6 @@ export function selectRecognitionCandidate(
   const selectedCluster = clusters.slice().sort((first, second) => {
     const preprocessDifference = distinctPreprocessings(second) - distinctPreprocessings(first);
     if (preprocessDifference) return preprocessDifference;
-    const sizeDifference = second.length - first.length;
-    if (sizeDifference) return sizeDifference;
     return candidateUtility(bestInCluster(second)) - candidateUtility(bestInCluster(first));
   })[0] as RecognitionCandidate[];
   const selected = bestInCluster(selectedCluster);

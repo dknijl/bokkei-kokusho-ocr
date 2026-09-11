@@ -1,3 +1,4 @@
+import { createOcrCanvas, releaseOcrCanvas, type OcrCanvas } from "./canvas.ts";
 import type { OcrRegion } from "./types.ts";
 
 export type PaperMaskResult = {
@@ -49,13 +50,13 @@ export function shouldSuppressSoftPaperCandidate(
   return recognitionScore !== undefined && recognitionScore < 0.25;
 }
 
-export function estimatePaperMask(source: HTMLCanvasElement, maxRegions = 8): PaperMaskResult {
+export function estimatePaperMask(source: OcrCanvas, maxRegions = 8): PaperMaskResult {
   if (source.width <= 0 || source.height <= 0) return { regions: [], confidence: 0 };
 
   const scale = Math.min(1, 192 / Math.max(source.width, source.height));
   const width = Math.max(1, Math.round(source.width * scale));
   const height = Math.max(1, Math.round(source.height * scale));
-  const canvas = document.createElement("canvas");
+  const canvas = createOcrCanvas();
   canvas.width = width;
   canvas.height = height;
 
@@ -141,7 +142,6 @@ export function estimatePaperMask(source: HTMLCanvasElement, maxRegions = 8): Pa
       confidence: Math.min(1, coveredArea / Math.max(1, width * height)),
     };
   } finally {
-    canvas.width = 0;
-    canvas.height = 0;
+    releaseOcrCanvas(canvas);
   }
 }

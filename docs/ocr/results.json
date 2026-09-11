@@ -1,0 +1,1250 @@
+{
+  "measuredAt": "2026-09-11T01:54:00.322Z",
+  "accuracyStatus": "Not approved: training-overlap and partial ground truth; independent material groups incomplete.",
+  "legacyRevision": "29a17ac75f1541192881ea1fff21a75a234cfaa2",
+  "providers": [
+    {
+      "requested": "wasm",
+      "name": "manuscript",
+      "provider": "WASM",
+      "modelRevision": "ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8",
+      "manifestUrl": "https://kokusho.nijl.ac.jp/biblio/200021552/manifest",
+      "canvasId": "https://kokusho.nijl.ac.jp/biblio/200021552/canvas/1",
+      "imageWidth": 3744,
+      "imageHeight": 5616,
+      "lineCount": 12,
+      "stats": {
+        "detectionCount": 12,
+        "modelInferenceCount": 13,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 12,
+        "extraRecognitions": 0,
+        "extraRecognitionAttempts": 0,
+        "highResolutionRetries": 0,
+        "additionalCropRequests": 0,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 21409,
+        "imageRequests": 1,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      }
+    },
+    {
+      "requested": "wasm",
+      "name": "illustrated",
+      "provider": "WASM",
+      "modelRevision": "ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8",
+      "manifestUrl": "https://kokusho.nijl.ac.jp/biblio/200011824/manifest",
+      "canvasId": "https://kokusho.nijl.ac.jp/biblio/200011824/canvas/4",
+      "imageWidth": 5616,
+      "imageHeight": 3744,
+      "lineCount": 30,
+      "stats": {
+        "detectionCount": 30,
+        "modelInferenceCount": 33,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 30,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 1,
+        "additionalCropRequests": 1,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 17074,
+        "imageRequests": 2,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      }
+    },
+    {
+      "requested": "wasm",
+      "name": "scroll",
+      "provider": "WASM",
+      "modelRevision": "ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8",
+      "manifestUrl": "https://da.dl.itc.u-tokyo.ac.jp/portal/repo/iiif/fbd0479b-dbb4-4eaa-95b8-f27e1c423e4b/manifest",
+      "canvasId": "https://iiif.dl.itc.u-tokyo.ac.jp/repo/iiif/fbd0479b-dbb4-4eaa-95b8-f27e1c423e4b/canvas/p1",
+      "imageWidth": 79508,
+      "imageHeight": 3082,
+      "lineCount": 80,
+      "stats": {
+        "detectionCount": 80,
+        "modelInferenceCount": 103,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 80,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 2,
+        "additionalCropRequests": 2,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4194304,
+        "durationMs": 171409,
+        "imageRequests": 42,
+        "sourceTiles": 21,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      }
+    },
+    {
+      "requested": "auto",
+      "name": "manuscript",
+      "provider": "WebGPU",
+      "modelRevision": "ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8",
+      "manifestUrl": "https://kokusho.nijl.ac.jp/biblio/200021552/manifest",
+      "canvasId": "https://kokusho.nijl.ac.jp/biblio/200021552/canvas/1",
+      "imageWidth": 3744,
+      "imageHeight": 5616,
+      "lineCount": 12,
+      "stats": {
+        "detectionCount": 12,
+        "modelInferenceCount": 13,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 12,
+        "extraRecognitions": 0,
+        "extraRecognitionAttempts": 0,
+        "highResolutionRetries": 0,
+        "additionalCropRequests": 0,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 23331,
+        "imageRequests": 1,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      }
+    },
+    {
+      "requested": "auto",
+      "name": "illustrated",
+      "provider": "WebGPU",
+      "modelRevision": "ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8",
+      "manifestUrl": "https://kokusho.nijl.ac.jp/biblio/200011824/manifest",
+      "canvasId": "https://kokusho.nijl.ac.jp/biblio/200011824/canvas/4",
+      "imageWidth": 5616,
+      "imageHeight": 3744,
+      "lineCount": 30,
+      "stats": {
+        "detectionCount": 30,
+        "modelInferenceCount": 33,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 30,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 1,
+        "additionalCropRequests": 1,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 23130,
+        "imageRequests": 2,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      }
+    },
+    {
+      "requested": "auto",
+      "name": "scroll",
+      "provider": "WebGPU",
+      "modelRevision": "ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8",
+      "manifestUrl": "https://da.dl.itc.u-tokyo.ac.jp/portal/repo/iiif/fbd0479b-dbb4-4eaa-95b8-f27e1c423e4b/manifest",
+      "canvasId": "https://iiif.dl.itc.u-tokyo.ac.jp/repo/iiif/fbd0479b-dbb4-4eaa-95b8-f27e1c423e4b/canvas/p1",
+      "imageWidth": 79508,
+      "imageHeight": 3082,
+      "lineCount": 80,
+      "stats": {
+        "detectionCount": 80,
+        "modelInferenceCount": 103,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 80,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 2,
+        "additionalCropRequests": 2,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4194304,
+        "durationMs": 59563,
+        "imageRequests": 42,
+        "sourceTiles": 21,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      }
+    }
+  ],
+  "ablation": [
+    {
+      "variant": "original",
+      "canvasId": "https://dl.ndl.go.jp/api/iiif/10301810/canvas/4",
+      "annotationCoverage": "partial",
+      "trainingOverlap": "known",
+      "metrics": {
+        "raw": {
+          "cer": 0.36330935251798563,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 101
+        },
+        "pageCer": 0.9748201438848921,
+        "normalizedPageCer": 0.9748201438848921,
+        "insertionRate": 0.07553956834532374,
+        "deletionRate": 0,
+        "pageErrors": {
+          "substitutions": 250,
+          "deletions": 0,
+          "insertions": 21,
+          "distance": 271
+        },
+        "nonTextFalsePositives": 0,
+        "normalized": {
+          "cer": 0.3597122302158273,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 100
+        },
+        "detection": {
+          "truePositive": 20,
+          "predicted": 22,
+          "reference": 24,
+          "recall": 0.8333333333333334,
+          "precision": 0.9090909090909091,
+          "f1": 0.8695652173913043
+        },
+        "readingOrderAccuracy": 0.4263157894736842,
+        "emptyRate": 0,
+        "lowConfidenceErrorDetectionRate": 0.05
+      },
+      "stats": {
+        "detectionCount": 22,
+        "modelInferenceCount": 23,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 22,
+        "extraRecognitions": 0,
+        "extraRecognitionAttempts": 0,
+        "highResolutionRetries": 0,
+        "additionalCropRequests": 0,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 18868,
+        "imageRequests": 1,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      },
+      "provider": "WASM"
+    },
+    {
+      "variant": "auto",
+      "canvasId": "https://dl.ndl.go.jp/api/iiif/10301810/canvas/4",
+      "annotationCoverage": "partial",
+      "trainingOverlap": "known",
+      "metrics": {
+        "raw": {
+          "cer": 0.36330935251798563,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 101
+        },
+        "pageCer": 0.9748201438848921,
+        "normalizedPageCer": 0.9748201438848921,
+        "insertionRate": 0.07553956834532374,
+        "deletionRate": 0,
+        "pageErrors": {
+          "substitutions": 250,
+          "deletions": 0,
+          "insertions": 21,
+          "distance": 271
+        },
+        "nonTextFalsePositives": 0,
+        "normalized": {
+          "cer": 0.3597122302158273,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 100
+        },
+        "detection": {
+          "truePositive": 20,
+          "predicted": 22,
+          "reference": 24,
+          "recall": 0.8333333333333334,
+          "precision": 0.9090909090909091,
+          "f1": 0.8695652173913043
+        },
+        "readingOrderAccuracy": 0.4263157894736842,
+        "emptyRate": 0,
+        "lowConfidenceErrorDetectionRate": 0.05
+      },
+      "stats": {
+        "detectionCount": 22,
+        "modelInferenceCount": 25,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 22,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 1,
+        "additionalCropRequests": 1,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 12975,
+        "imageRequests": 2,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      },
+      "provider": "WASM"
+    },
+    {
+      "variant": "grayscale-contrast",
+      "canvasId": "https://dl.ndl.go.jp/api/iiif/10301810/canvas/4",
+      "annotationCoverage": "partial",
+      "trainingOverlap": "known",
+      "metrics": {
+        "raw": {
+          "cer": 0.35251798561151076,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 98
+        },
+        "pageCer": 0.9676258992805755,
+        "normalizedPageCer": 0.9676258992805755,
+        "insertionRate": 0.06474820143884892,
+        "deletionRate": 0,
+        "pageErrors": {
+          "substitutions": 251,
+          "deletions": 0,
+          "insertions": 18,
+          "distance": 269
+        },
+        "nonTextFalsePositives": 0,
+        "normalized": {
+          "cer": 0.3489208633093525,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 97
+        },
+        "detection": {
+          "truePositive": 20,
+          "predicted": 22,
+          "reference": 24,
+          "recall": 0.8333333333333334,
+          "precision": 0.9090909090909091,
+          "f1": 0.8695652173913043
+        },
+        "readingOrderAccuracy": 0.4263157894736842,
+        "emptyRate": 0,
+        "lowConfidenceErrorDetectionRate": 0.05
+      },
+      "stats": {
+        "detectionCount": 22,
+        "modelInferenceCount": 25,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 22,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 0,
+        "additionalCropRequests": 0,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 21802,
+        "imageRequests": 1,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 6,
+        "liveCanvasesAfterPage": 0
+      },
+      "provider": "WASM"
+    },
+    {
+      "variant": "background-normalized",
+      "canvasId": "https://dl.ndl.go.jp/api/iiif/10301810/canvas/4",
+      "annotationCoverage": "partial",
+      "trainingOverlap": "known",
+      "metrics": {
+        "raw": {
+          "cer": 0.36330935251798563,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 101
+        },
+        "pageCer": 0.9748201438848921,
+        "normalizedPageCer": 0.9748201438848921,
+        "insertionRate": 0.07553956834532374,
+        "deletionRate": 0,
+        "pageErrors": {
+          "substitutions": 250,
+          "deletions": 0,
+          "insertions": 21,
+          "distance": 271
+        },
+        "nonTextFalsePositives": 0,
+        "normalized": {
+          "cer": 0.35611510791366907,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 99
+        },
+        "detection": {
+          "truePositive": 20,
+          "predicted": 22,
+          "reference": 24,
+          "recall": 0.8333333333333334,
+          "precision": 0.9090909090909091,
+          "f1": 0.8695652173913043
+        },
+        "readingOrderAccuracy": 0.4263157894736842,
+        "emptyRate": 0,
+        "lowConfidenceErrorDetectionRate": 0.1
+      },
+      "stats": {
+        "detectionCount": 22,
+        "modelInferenceCount": 25,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 22,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 0,
+        "additionalCropRequests": 0,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 33965,
+        "imageRequests": 1,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 6,
+        "liveCanvasesAfterPage": 0
+      },
+      "provider": "WASM"
+    },
+    {
+      "variant": "sauvola",
+      "canvasId": "https://dl.ndl.go.jp/api/iiif/10301810/canvas/4",
+      "annotationCoverage": "partial",
+      "trainingOverlap": "known",
+      "metrics": {
+        "raw": {
+          "cer": 0.3489208633093525,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 97
+        },
+        "pageCer": 0.9640287769784173,
+        "normalizedPageCer": 0.9640287769784173,
+        "insertionRate": 0.06115107913669065,
+        "deletionRate": 0,
+        "pageErrors": {
+          "substitutions": 251,
+          "deletions": 0,
+          "insertions": 17,
+          "distance": 268
+        },
+        "nonTextFalsePositives": 0,
+        "normalized": {
+          "cer": 0.34532374100719426,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 96
+        },
+        "detection": {
+          "truePositive": 20,
+          "predicted": 22,
+          "reference": 24,
+          "recall": 0.8333333333333334,
+          "precision": 0.9090909090909091,
+          "f1": 0.8695652173913043
+        },
+        "readingOrderAccuracy": 0.4263157894736842,
+        "emptyRate": 0,
+        "lowConfidenceErrorDetectionRate": 0.1
+      },
+      "stats": {
+        "detectionCount": 22,
+        "modelInferenceCount": 25,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 22,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 0,
+        "additionalCropRequests": 0,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 27543,
+        "imageRequests": 1,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 6,
+        "liveCanvasesAfterPage": 0
+      },
+      "provider": "WASM"
+    },
+    {
+      "variant": "adaptive-binary",
+      "canvasId": "https://dl.ndl.go.jp/api/iiif/10301810/canvas/4",
+      "annotationCoverage": "partial",
+      "trainingOverlap": "known",
+      "metrics": {
+        "raw": {
+          "cer": 0.3489208633093525,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 97
+        },
+        "pageCer": 0.9640287769784173,
+        "normalizedPageCer": 0.9640287769784173,
+        "insertionRate": 0.06115107913669065,
+        "deletionRate": 0,
+        "pageErrors": {
+          "substitutions": 251,
+          "deletions": 0,
+          "insertions": 17,
+          "distance": 268
+        },
+        "nonTextFalsePositives": 0,
+        "normalized": {
+          "cer": 0.34532374100719426,
+          "exactLineRate": 0.25,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 96
+        },
+        "detection": {
+          "truePositive": 20,
+          "predicted": 22,
+          "reference": 24,
+          "recall": 0.8333333333333334,
+          "precision": 0.9090909090909091,
+          "f1": 0.8695652173913043
+        },
+        "readingOrderAccuracy": 0.4263157894736842,
+        "emptyRate": 0,
+        "lowConfidenceErrorDetectionRate": 0.1
+      },
+      "stats": {
+        "detectionCount": 22,
+        "modelInferenceCount": 25,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 22,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 0,
+        "additionalCropRequests": 0,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 17496,
+        "imageRequests": 1,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 6,
+        "liveCanvasesAfterPage": 0
+      },
+      "provider": "WASM"
+    },
+    {
+      "variant": "legacy",
+      "canvasId": "https://dl.ndl.go.jp/api/iiif/10301810/canvas/4",
+      "annotationCoverage": "partial",
+      "trainingOverlap": "known",
+      "metrics": {
+        "raw": {
+          "cer": 0.44244604316546765,
+          "exactLineRate": 0.2916666666666667,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 123
+        },
+        "pageCer": 1.039568345323741,
+        "normalizedPageCer": 1.039568345323741,
+        "insertionRate": 0.15467625899280577,
+        "deletionRate": 0,
+        "pageErrors": {
+          "substitutions": 246,
+          "deletions": 0,
+          "insertions": 43,
+          "distance": 289
+        },
+        "nonTextFalsePositives": 0,
+        "normalized": {
+          "cer": 0.44244604316546765,
+          "exactLineRate": 0.2916666666666667,
+          "totalReferenceCharacters": 278,
+          "totalEditDistance": 123
+        },
+        "detection": {
+          "truePositive": 20,
+          "predicted": 23,
+          "reference": 24,
+          "recall": 0.8333333333333334,
+          "precision": 0.8695652173913043,
+          "f1": 0.851063829787234
+        },
+        "readingOrderAccuracy": 0.4263157894736842,
+        "emptyRate": 0,
+        "lowConfidenceErrorDetectionRate": 0.1
+      },
+      "stats": {
+        "detectionCount": 23,
+        "modelInferenceCount": 26,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 23,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 0,
+        "additionalCropRequests": 0,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 2776000,
+        "durationMs": 39397
+      },
+      "provider": "WASM"
+    }
+  ],
+  "gates": {
+    "auto": {
+      "eligible": false,
+      "reasons": [
+        "Not book-disjoint evaluation: ndl-minhon-10301810-004",
+        "Training overlap is not excluded: ndl-minhon-10301810-004",
+        "Incomplete page annotation: ndl-minhon-10301810-004",
+        "CER did not improve",
+        "Missing material group: manuscript",
+        "Missing material group: scroll",
+        "Missing material group: degraded",
+        "Missing material group: scattered-or-red"
+      ],
+      "before": {
+        "cer": 0.36330935251798563,
+        "recall": 0.8333333333333334,
+        "insertionRate": 0.07553956834532374,
+        "deletionRate": 0
+      },
+      "after": {
+        "cer": 0.36330935251798563,
+        "recall": 0.8333333333333334,
+        "insertionRate": 0.07553956834532374,
+        "deletionRate": 0
+      },
+      "groups": [
+        {
+          "group": "manuscript",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "printed",
+          "pages": 1,
+          "before": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "illustrated",
+          "pages": 1,
+          "before": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "scroll",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "degraded",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "scattered-or-red",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        }
+      ]
+    },
+    "grayscale-contrast": {
+      "eligible": false,
+      "reasons": [
+        "Not book-disjoint evaluation: ndl-minhon-10301810-004",
+        "Training overlap is not excluded: ndl-minhon-10301810-004",
+        "Incomplete page annotation: ndl-minhon-10301810-004",
+        "Missing material group: manuscript",
+        "Missing material group: scroll",
+        "Missing material group: degraded",
+        "Missing material group: scattered-or-red"
+      ],
+      "before": {
+        "cer": 0.36330935251798563,
+        "recall": 0.8333333333333334,
+        "insertionRate": 0.07553956834532374,
+        "deletionRate": 0
+      },
+      "after": {
+        "cer": 0.35251798561151076,
+        "recall": 0.8333333333333334,
+        "insertionRate": 0.06474820143884892,
+        "deletionRate": 0
+      },
+      "groups": [
+        {
+          "group": "manuscript",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "printed",
+          "pages": 1,
+          "before": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0.35251798561151076,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.06474820143884892,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "illustrated",
+          "pages": 1,
+          "before": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0.35251798561151076,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.06474820143884892,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "scroll",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "degraded",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "scattered-or-red",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        }
+      ]
+    },
+    "background-normalized": {
+      "eligible": false,
+      "reasons": [
+        "Not book-disjoint evaluation: ndl-minhon-10301810-004",
+        "Training overlap is not excluded: ndl-minhon-10301810-004",
+        "Incomplete page annotation: ndl-minhon-10301810-004",
+        "CER did not improve",
+        "Missing material group: manuscript",
+        "Missing material group: scroll",
+        "Missing material group: degraded",
+        "Missing material group: scattered-or-red"
+      ],
+      "before": {
+        "cer": 0.36330935251798563,
+        "recall": 0.8333333333333334,
+        "insertionRate": 0.07553956834532374,
+        "deletionRate": 0
+      },
+      "after": {
+        "cer": 0.36330935251798563,
+        "recall": 0.8333333333333334,
+        "insertionRate": 0.07553956834532374,
+        "deletionRate": 0
+      },
+      "groups": [
+        {
+          "group": "manuscript",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "printed",
+          "pages": 1,
+          "before": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "illustrated",
+          "pages": 1,
+          "before": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "scroll",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "degraded",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "scattered-or-red",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        }
+      ]
+    },
+    "sauvola": {
+      "eligible": false,
+      "reasons": [
+        "Not book-disjoint evaluation: ndl-minhon-10301810-004",
+        "Training overlap is not excluded: ndl-minhon-10301810-004",
+        "Incomplete page annotation: ndl-minhon-10301810-004",
+        "Missing material group: manuscript",
+        "Missing material group: scroll",
+        "Missing material group: degraded",
+        "Missing material group: scattered-or-red"
+      ],
+      "before": {
+        "cer": 0.36330935251798563,
+        "recall": 0.8333333333333334,
+        "insertionRate": 0.07553956834532374,
+        "deletionRate": 0
+      },
+      "after": {
+        "cer": 0.3489208633093525,
+        "recall": 0.8333333333333334,
+        "insertionRate": 0.06115107913669065,
+        "deletionRate": 0
+      },
+      "groups": [
+        {
+          "group": "manuscript",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "printed",
+          "pages": 1,
+          "before": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0.3489208633093525,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.06115107913669065,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "illustrated",
+          "pages": 1,
+          "before": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0.3489208633093525,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.06115107913669065,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "scroll",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "degraded",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "scattered-or-red",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        }
+      ]
+    },
+    "adaptive-binary": {
+      "eligible": false,
+      "reasons": [
+        "Not book-disjoint evaluation: ndl-minhon-10301810-004",
+        "Training overlap is not excluded: ndl-minhon-10301810-004",
+        "Incomplete page annotation: ndl-minhon-10301810-004",
+        "Missing material group: manuscript",
+        "Missing material group: scroll",
+        "Missing material group: degraded",
+        "Missing material group: scattered-or-red"
+      ],
+      "before": {
+        "cer": 0.36330935251798563,
+        "recall": 0.8333333333333334,
+        "insertionRate": 0.07553956834532374,
+        "deletionRate": 0
+      },
+      "after": {
+        "cer": 0.3489208633093525,
+        "recall": 0.8333333333333334,
+        "insertionRate": 0.06115107913669065,
+        "deletionRate": 0
+      },
+      "groups": [
+        {
+          "group": "manuscript",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "printed",
+          "pages": 1,
+          "before": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0.3489208633093525,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.06115107913669065,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "illustrated",
+          "pages": 1,
+          "before": {
+            "cer": 0.36330935251798563,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.07553956834532374,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0.3489208633093525,
+            "recall": 0.8333333333333334,
+            "insertionRate": 0.06115107913669065,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "scroll",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "degraded",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        },
+        {
+          "group": "scattered-or-red",
+          "pages": 0,
+          "before": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          },
+          "after": {
+            "cer": 0,
+            "recall": 0,
+            "insertionRate": 0,
+            "deletionRate": 0
+          }
+        }
+      ]
+    }
+  },
+  "verification": {
+    "unitTests": {
+      "passed": 47
+    },
+    "browserTests": {
+      "passed": 13,
+      "ocr": "mocked"
+    },
+    "realModelTests": {
+      "passed": 3,
+      "materialsPerProvider": 3,
+      "providers": [
+        "WASM",
+        "WebGPU"
+      ]
+    },
+    "productionModelTest": {
+      "passed": 1
+    },
+    "build": "passed",
+    "typecheck": {
+      "status": "failed",
+      "preExistingErrors": 16,
+      "newErrors": 0
+    },
+    "simulated1000Canvases": {
+      "saved": 1000,
+      "liveCanvasesAfterEachSave": 0,
+      "realInference": false
+    }
+  }
+}

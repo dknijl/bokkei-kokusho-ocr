@@ -16,7 +16,6 @@
     type MetomPrediction,
   } from "./lib/ocr";
   import {
-    recognizePageWithNdlLite,
     type NdlOcrResult,
     type NdlOcrProgress,
   } from "./lib/ndl-ocr";
@@ -54,6 +53,12 @@ import {
     LocalizedError,
     type Locale,
   } from "./lib/i18n";
+
+  import BatchOcr from "./BatchOcr.svelte";
+  import { executeOcrPage } from "./lib/ocr/worker-client";
+  import { resolveLatestNdlModelRevision } from "./lib/ocr/model-source";
+  let batchRunning = $state(false);
+  let imagePreprocessing: "off" | "auto" = $state("auto");
 
   let manifest: ViewerManifest = $state(initialManifest);
   let locale: Locale = $state("ja");
@@ -166,6 +171,7 @@ import {
     return {
       ...DEFAULT_NDL_OCR_OPTIONS,
       profile: ocrProfile,
+      preprocessing: imagePreprocessing,
       enableHighResolutionRetry: ocrProfile !== "fast",
       enableAdaptiveTiling: ocrProfile === "accurate",
       enableDeskewRetry: ocrProfile === "accurate",
@@ -638,9 +644,9 @@ import {
   }
 
   async function runFullPageOcr() {
-    if (fullOcrRunning) return;
+    if (fullOcrRunning || batchRunning || page.ocrAvailability === "unsupported") return;
 
-    const targetPage = page;
+    const targetPage = $state.snapshot(page);
     const targetManifestUrl = manifest.url;
     const targetCanvasId = targetPage.canvasId;
     const ocrOptions = activeOcrOptions();
@@ -662,6 +668,7 @@ import {
     });
     viewerDebug.log("ocr-start", { canvasId: targetCanvasId });
     try {
+      ocrOptions.modelRevision = await resolveLatestNdlModelRevision(controller.signal);
       const applyResult = (result: NdlOcrResult): boolean => {
         if (controller.signal.aborted) {
           viewerDebug.log("ocr-cancelled", { canvasId: targetCanvasId, reason: "aborted" });
@@ -697,7 +704,7 @@ import {
         return true;
       };
 
-      const result = await recognizePageWithNdlLite(
+      const result = await executeOcrPage(
         targetPage,
         ocrOptions,
         (progress) => {
@@ -860,13 +867,14 @@ import {
       >
         <span>{line.text || t(locale, "unreadable")}</span>
         <small class:low={lowConfidence} title={scoreSummary} aria-label={scoreSummary}>
+          {#if lowConfidence}<span>{locale === "ja" ? "要確認" : "Review needed"}</span>{/if}
           <span>{t(locale, "recognitionShort")} {scorePercent(line.recognitionScore)}</span>
           <span>{t(locale, "detectionShort")} {scorePercent(line.detectionScore)}</span>
         </small>
       </button>
     {/each}
   {:else}
-    <div class="ocr-empty"><strong>{t(locale, "ocrNotRun")}</strong><span>{t(locale, "runOcrInstruction")}</span></div>
+    <div class="ocr-empty"><strong>{page.ocrEngine ? (locale === "ja" ? "文字行が検出されませんでした" : "No text lines detected") : t(locale, "ocrNotRun")}</strong><span>{page.ocrEngine ? (locale === "ja" ? "白紙と判定した結果ではありません。" : "This does not establish that the canvas is blank.") : t(locale, "runOcrInstruction")}</span></div>
   {/if}
 {/snippet}
 
@@ -898,7 +906,7 @@ import {
       <div class="rail-count">{String(pageIndex + 1).padStart(2, "0")} / {String(manifest.pages.length).padStart(2, "0")}</div>
       {#each manifest.pages as item, index (`${item.canvasId}-${index}`)}
         <button type="button" data-page-index={index} class:active={pageIndex === index} class="thumb" style:--thumb-aspect-ratio={thumbnailAspectRatio(item)} onclick={() => selectPage(index)} aria-label={t(locale, "pageNumber", { number: index + 1, label: pageLabelFor(item) })}>
-          <img src={item.thumbnail} alt="" loading="lazy" decoding="async" />
+          {#if item.thumbnail}<img src={item.thumbnail} alt="" loading="lazy" decoding="async" />{/if}
           <span>{index + 1}</span>
         </button>
       {/each}
@@ -938,10 +946,17 @@ import {
         <button type="button" class:active={metomMode} class="crop-mode-button" onclick={openMetomPanel}>{t(locale, "selectCharacter")}</button>
         <label class="ocr-profile-control" for="ocr-profile">
           <span>{t(locale, "ocrProfile")}</span>
-          <select id="ocr-profile" bind:value={ocrProfile} disabled={fullOcrRunning}>
+          <select id="ocr-profile" bind:value={ocrProfile} disabled={fullOcrRunning || batchRunning}>
             <option value="fast">{t(locale, "ocrProfileFast")}</option>
             <option value="balanced">{t(locale, "ocrProfileBalanced")}</option>
             <option value="accurate">{t(locale, "ocrProfileAccurate")}</option>
+          </select>
+        </label>
+        <label class="ocr-profile-control" for="ocr-preprocessing">
+          <span>{locale === "ja" ? "画像補正" : "Image correction"}</span>
+          <select id="ocr-preprocessing" bind:value={imagePreprocessing} disabled={fullOcrRunning || batchRunning}>
+            <option value="auto">{locale === "ja" ? "自動（検証済みのみ）" : "Auto (validated only)"}</option>
+            <option value="off">{locale === "ja" ? "なし" : "Off"}</option>
           </select>
         </label>
         <section class:running={fullOcrRunning} class="toolbar-ocr-action" aria-label={t(locale, "autoOcr")}>
@@ -957,7 +972,7 @@ import {
               <span class="toolbar-ocr-label"><span>{t(locale, "cancel")}</span>{#if fullOcrProgress}<b>{fullOcrProgress.percent}%</b>{/if}</span>
             </button>
           {:else}
-            <button type="button" class="toolbar-ocr-button run-full-ocr" onclick={() => void runFullPageOcr()}>{page.ocrEngine ? t(locale, "rerunPage") : t(locale, "runPage")}</button>
+            <button type="button" class="toolbar-ocr-button run-full-ocr" disabled={batchRunning || page.ocrAvailability === "unsupported"} onclick={() => void runFullPageOcr()}>{page.ocrEngine ? t(locale, "rerunPage") : t(locale, "runPage")}</button>
           {/if}
         </section>
         <div class="zoom-control">
@@ -968,10 +983,19 @@ import {
         </div>
       </div>
 
+      <BatchOcr {manifest} options={activeOcrOptions()} currentCanvasId={page.canvasId} singleRunning={fullOcrRunning} {locale}
+        onBusy={(value) => { batchRunning = value; }}
+        onPageResult={(url, sourcePage, result) => {
+          if (url !== manifest.url || page.canvasId !== sourcePage.canvasId || page.imageServiceId !== sourcePage.imageServiceId
+            || (page.sourceImage || page.image) !== (sourcePage.sourceImage || sourcePage.image)) return;
+          applyOcrResult({ manifest, targetManifestUrl: url, targetCanvasId: sourcePage.canvasId, result });
+          overlay = result.lines.length > 0;
+        }} />
       <div class="canvas-wrap">
         <div class:contrast={viewMode === "contrast"} class="manuscript" style:width={`${zoom}%`}>
           {#key page.image}
-            <img src={page.image} alt={t(locale, "imageAlt", { title: manifestTitle, label: pageLabel })} />
+            {#if page.image}<img src={page.image} alt={t(locale, "imageAlt", { title: manifestTitle, label: pageLabel })} />
+            {:else}<p class="ocr-empty">{locale === "ja" ? "このコマの画像構成はOCRに未対応です。元の番号を保持しています。" : "This canvas is unsupported for OCR. Its original number is preserved."}</p>{/if}
           {/key}
           {#if overlay && ocrRegions.length}
             <div class="ocr-boxes" aria-label={t(locale, "detectedRegions")}>
@@ -1074,6 +1098,9 @@ import {
               <div class="benchmark-metrics" aria-label={t(locale, "benchmarkMetrics")}>
                 <span>{t(locale, "benchmarkMetrics")}</span>
                 <b>{t(locale, "benchmarkCer")} {metricPercent(benchmarkMetrics.raw.cer)}</b>
+                <b>{locale === "ja" ? "ページ全文CER" : "Full-page CER"} {metricPercent(benchmarkMetrics.pageCer)}</b>
+                <b>{locale === "ja" ? "文字挿入率" : "Insertion rate"} {metricPercent(benchmarkMetrics.insertionRate)}</b>
+                <b>{locale === "ja" ? "文字脱落率" : "Deletion rate"} {metricPercent(benchmarkMetrics.deletionRate)}</b>
                 {#if benchmarkMetrics.normalized}<b>{t(locale, "benchmarkNormalizedCer")} {metricPercent(benchmarkMetrics.normalized.cer)}</b>{/if}
                 <b>{t(locale, "benchmarkExact")} {metricPercent(benchmarkMetrics.raw.exactLineRate)}</b>
                 <b>{t(locale, "benchmarkRecall")} {metricPercent(benchmarkMetrics.detection.recall)}</b>

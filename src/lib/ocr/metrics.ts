@@ -1,5 +1,5 @@
 import type { OcrLine, OcrRegion } from "./types.ts";
-import { levenshteinDistance } from "./edit-distance.ts";
+import { levenshteinDistance, characterErrors } from "./edit-distance.ts";
 
 export type OcrGroundTruthLine = {
   text: string;
@@ -15,6 +15,13 @@ export type OcrGroundTruthPage = {
   width: number;
   height: number;
   lines: OcrGroundTruthLine[];
+  nonTextRegions?: OcrRegion[];
+  bookId?: string;
+  split?: "calibration" | "evaluation";
+  trainingOverlap?: "known" | "unknown" | "excluded";
+  sourceCitation?: string;
+  annotationCoverage?: "complete" | "partial";
+  imageUrl?: string;
   tags: Array<
     | "printed"
     | "manuscript"
@@ -25,6 +32,9 @@ export type OcrGroundTruthPage = {
     | "illustrated"
     | "faded"
     | "bleed-through"
+    | "scroll"
+    | "scattered"
+    | "red-ink"
   >;
 };
 
@@ -51,6 +61,12 @@ export type OcrPageMetrics = {
   readingOrderAccuracy: number;
   emptyRate: number;
   lowConfidenceErrorDetectionRate: number;
+  pageCer: number;
+  normalizedPageCer?: number;
+  insertionRate: number;
+  deletionRate: number;
+  pageErrors: ReturnType<typeof characterErrors>;
+  nonTextFalsePositives: number;
 };
 
 export type OcrRegionMatch = {
@@ -120,6 +136,7 @@ export function calculateTextMetrics(
   reference: OcrGroundTruthLine[],
   matches: OcrRegionMatch[],
   normalize: (value: string) => string = (value) => value,
+  useNormalizedReference = false,
 ): OcrTextMetrics {
   const matchedByReference = new Map(matches.map((match) => [match.referenceIndex, match.predictedIndex]));
   let totalReferenceCharacters = 0;
@@ -129,7 +146,7 @@ export function calculateTextMetrics(
   reference.forEach((truth, referenceIndex) => {
     const predictionIndex = matchedByReference.get(referenceIndex);
     const prediction = predictionIndex === undefined ? "" : predicted[predictionIndex]?.text ?? "";
-    const expectedText = normalize(truth.normalizedText ?? truth.text);
+    const expectedText = normalize(useNormalizedReference ? truth.normalizedText ?? truth.text : truth.text);
     const actualText = normalize(prediction);
     totalReferenceCharacters += Array.from(expectedText).length;
     totalEditDistance += levenshteinDistance(expectedText, actualText);
@@ -179,7 +196,7 @@ export function evaluateOcrPage(options: {
   const matches = matchOcrRegions(options.predicted, referenceLines, options.iouThreshold ?? 0.1);
   const raw = calculateTextMetrics(options.predicted, referenceLines, matches);
   const normalized = options.normalizedText
-    ? calculateTextMetrics(options.predicted, referenceLines, matches, options.normalizedText)
+    ? calculateTextMetrics(options.predicted, referenceLines, matches, options.normalizedText, true)
     : undefined;
   const matchedByPrediction = new Map(matches.map((match) => [match.predictedIndex, match.referenceIndex]));
   const readingOrder = matches
@@ -227,8 +244,21 @@ export function evaluateOcrPage(options: {
   }, 0);
   const totalErrors = errorPredictions.size + missingReferenceErrors;
 
+  const orderedPrediction = options.predicted.slice().sort((a, b) => (a.readingOrder ?? options.predicted.indexOf(a)) - (b.readingOrder ?? options.predicted.indexOf(b)));
+  const pageText = orderedPrediction.map((line) => line.text).join("");
+  const referenceText = referenceLines.map((line) => line.text).join("");
+  const nonTextRegions = Array.isArray(options.reference) ? [] : options.reference.nonTextRegions ?? [];
+  const pageErrors = characterErrors(referenceText, pageText);
   return {
     raw,
+    pageCer: calculateCer(referenceText, pageText),
+    ...(options.normalizedText ? { normalizedPageCer: calculateCer(
+      referenceLines.map((line) => options.normalizedText!(line.normalizedText ?? line.text)).join(""), options.normalizedText(pageText),
+    ) } : {}),
+    insertionRate: pageErrors.insertions / Math.max(1, Array.from(referenceText).length),
+    deletionRate: pageErrors.deletions / Math.max(1, Array.from(referenceText).length),
+    pageErrors,
+    nonTextFalsePositives: options.predicted.filter((line) => line.region && nonTextRegions.some((region) => intersectionArea(line.region!, region) / Math.max(1, area(line.region!)) >= 0.5)).length,
     ...(normalized ? { normalized } : {}),
     detection: calculateDetectionMetrics(options.predicted, referenceLines, matches),
     readingOrderAccuracy,

@@ -10,11 +10,13 @@
     "build": "node build/run-vite-build.mjs",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json --tsgo",
-    "test:unit": "node --experimental-strip-types --test src/lib/ocr/ocr.test.ts",
+    "test:unit": "node --experimental-strip-types --test src/lib/ocr/*.test.ts",
     "test:browser": "playwright test",
     "test": "npm run check && npm run test:unit && npm run build",
     "test:all": "npm test && npm run test:browser",
-    "update:itaiji": "node scripts/update-itaiji.mjs"
+    "update:itaiji": "node scripts/update-itaiji.mjs",
+    "prepare:ocr-evaluation": "node scripts/prepare-ocr-evaluation.mjs",
+    "test:ocr-evaluation": "playwright test --config playwright.ocr-evaluation.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
@@ -28,6 +30,7 @@
   },
   "type": "module",
   "dependencies": {
-    "onnxruntime-web": "^1.29.0"
+    "onnxruntime-web": "^1.29.0",
+    "@zip.js/zip.js": "^2.14.0"
   }
 }

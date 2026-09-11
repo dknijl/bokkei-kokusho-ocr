@@ -14,6 +14,12 @@ export type {
 } from "./ocr/types.ts";
 
 export type ViewerPage = {
+  canvasIndex?: number;
+  sourceImage?: string;
+  sourceWidth?: number;
+  sourceHeight?: number;
+  ocrAvailability?: "supported" | "unsupported";
+  unsupportedReason?: string;
   canvasId: string;
   imageServiceId: string;
   label: string;
@@ -198,25 +204,41 @@ const sizedIiifImage = (service: string, fallback: string, width: number) =>
 export function parseManifest(raw: Record<string, any>, fallbackUrl: string, locale: Locale = "ja"): ViewerManifest {
   const canvases = raw.sequences?.[0]?.canvases ?? raw.items ?? [];
 
-  const pages: ViewerPage[] = canvases.flatMap((canvas: Record<string, any>, index: number) => {
-    const body = canvas.images?.[0]?.resource ?? canvas.items?.[0]?.items?.[0]?.body ?? {};
+  const pages: ViewerPage[] = canvases.map((canvas: Record<string, any>, index: number) => {
+    const annotations = canvas.images ?? (canvas.items ?? []).flatMap((item: Record<string, any>) => item.items ?? []);
+    const paintings = annotations.filter((annotation: Record<string, any>) => {
+      const motivation = annotation.motivation;
+      return !motivation || [motivation].flat().some((value) => value === "painting" || value === "sc:painting");
+    });
+    const annotation = paintings[0] ?? {};
+    let body = annotation.resource ?? annotation.body ?? {};
+    if (body.type === "Choice" || body["@type"] === "oa:Choice") body = body.default ?? body.items?.[0] ?? {};
+    const singleBody = !Array.isArray(body);
+    if (!singleBody) body = {};
     const imageServiceId = serviceUrl(body.service);
-    const original = String(body.id ?? body["@id"] ?? canvas.thumbnail?.[0]?.id ?? canvas.thumbnail?.id ?? "");
-    if (!imageServiceId && !original) return [];
-
+    const original = String(body.id ?? body["@id"] ?? "");
+    const target = annotation.target ?? annotation.on;
+    const fullTarget = !target || (typeof target === "string" && !target.includes("#"));
+    const imageBody = !body.type && !body["@type"] || ["Image", "dctypes:Image"].includes(body.type ?? body["@type"]);
+    const supported = paintings.length === 1 && singleBody && imageBody && fullTarget && Boolean(imageServiceId || original);
     const labelTranslations = localizedValues(canvas.label);
-
-    return [{
+    return {
+      canvasIndex: index,
       canvasId: String(canvas.id ?? canvas["@id"] ?? `${fallbackUrl}#canvas-${index + 1}`),
       imageServiceId,
+      sourceImage: original,
+      sourceWidth: Number(body.width ?? 0),
+      sourceHeight: Number(body.height ?? 0),
+      ocrAvailability: supported ? "supported" : "unsupported",
+      unsupportedReason: supported ? undefined : "Canvas has no single full-canvas image; empty or composite canvases are not supported for OCR.",
       label: localizedText(labelTranslations, locale) || String(index + 1),
       labelTranslations: Object.keys(labelTranslations).length ? labelTranslations : { none: String(index + 1) },
-      image: sizedIiifImage(imageServiceId, original, 1200),
-      thumbnail: sizedIiifImage(imageServiceId, original, 180),
+      image: supported ? sizedIiifImage(imageServiceId, original, 1200) : "",
+      thumbnail: supported ? sizedIiifImage(imageServiceId, original, 180) : "",
       width: Number(canvas.width ?? body.width ?? 0),
       height: Number(canvas.height ?? body.height ?? 0),
       result: [],
-    }];
+    };
   });
 
   if (!pages.length) {

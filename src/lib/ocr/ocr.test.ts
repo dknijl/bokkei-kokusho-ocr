@@ -1,3 +1,4 @@
+import { DEFAULT_NDL_OCR_OPTIONS } from "./profiles.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { compareRecognitionSelectionStrategies, selectRecognitionCandidate } from "./candidates.ts";
@@ -15,6 +16,7 @@ import { buildLineCropUrl, expandCropRegion, floorCeilCropRegion } from "./image
 import { evaluateOcrPage } from "./metrics.ts";
 import { globalNms, mergeAdjacentDetections } from "./nms.ts";
 import { isOcrModelCacheFresh, OCR_MODEL_CACHE_MAX_AGE_MS } from "./model-cache.ts";
+import { buildOcrCacheKey } from "./cache.ts";
 import {
   combineSegmentRecognitions,
   createLineWindows,
@@ -51,6 +53,34 @@ test("adjacent vertical fragments merge without joining neighboring columns", ()
   assert.equal(result.length, 2);
   const merged = result.find((item) => item.x === 100);
   assert.deepEqual(merged, { x: 100, y: 0, width: 12, height: 79, detectionScore: 0.7 });
+});
+
+test("small annotations above a wide body line retain three separate detector regions", () => {
+  // Rounded RTMDet output from 古今和歌集 200021552, first canvas (1333px image).
+  // The old containment-based rule joined these into one 75×1101 region.
+  const regions = [
+    { x: 1008, y: 389, width: 29, height: 167, detectionScore: 0.59 },
+    { x: 969, y: 391, width: 31, height: 165, detectionScore: 0.52 },
+    { x: 966, y: 614, width: 75, height: 876, detectionScore: 0.84 },
+  ];
+  const unchanged = structuredClone(regions);
+  for (const orientation of ["vertical", "horizontal"] as const) {
+    const boxes = regions.map(box => orientation === "vertical" ? box : {
+      ...box, x: box.y, y: box.x, width: box.height, height: box.width,
+    });
+    const options = { orientation, maxGapRatio: 1.2, transverseOverlapThreshold: 0.65 };
+    assert.deepEqual(mergeAdjacentDetections(boxes, options), boxes);
+    assert.deepEqual(mergeAdjacentDetections([...boxes].reverse(), options), boxes);
+  }
+  assert.deepEqual(regions, unchanged);
+});
+
+test("fragments with modest width differences still join along the same writing lane", () => {
+  const boxes = [
+    { x: 100, y: 0, width: 24, height: 70, detectionScore: 0.7 },
+    { x: 98, y: 75, width: 28, height: 80, detectionScore: 0.6 },
+  ];
+  assert.deepEqual(mergeAdjacentDetections(boxes), [{ x: 98, y: 0, width: 28, height: 155, detectionScore: 0.7 }]);
 });
 
 test("crop bounds expand outward and stay within the image", () => {
@@ -281,6 +311,51 @@ test("OCR model cache expires after seven days", () => {
   assert.equal(isOcrModelCacheFresh(savedAt, savedAt - 1), false);
 });
 
+test("OCR cache keys are stable across option property order", () => {
+  const first = buildOcrCacheKey({
+    modelRevision: "model",
+    pipelineVersion: "pipeline",
+    manifestUrl: "https://example.test/manifest",
+    canvasId: "canvas-1",
+    imageServiceId: "https://example.test/iiif",
+    profile: "balanced",
+    options: {
+      ...DEFAULT_NDL_OCR_OPTIONS,
+      profile: "balanced",
+      paperFilter: "off",
+      enableHighResolutionRetry: true,
+      enableAdaptiveTiling: false,
+      enableDeskewRetry: false,
+      enableLongLineSegmentation: false,
+      maxExtraRecognitions: 2,
+      writingMode: "auto",
+      scattered: false,
+    },
+  });
+  const second = buildOcrCacheKey({
+    modelRevision: "model",
+    pipelineVersion: "pipeline",
+    manifestUrl: "https://example.test/manifest",
+    canvasId: "canvas-1",
+    imageServiceId: "https://example.test/iiif",
+    profile: "balanced",
+    options: {
+      ...DEFAULT_NDL_OCR_OPTIONS,
+      maxExtraRecognitions: 2,
+      enableLongLineSegmentation: false,
+      enableDeskewRetry: false,
+      enableAdaptiveTiling: false,
+      enableHighResolutionRetry: true,
+      paperFilter: "off",
+      profile: "balanced",
+      writingMode: "auto",
+      scattered: false,
+    },
+  },
+  );
+  assert.equal(first, second);
+});
+
 test("OCR retry work is capped for resource safety", () => {
   assert.equal(normalizeNdlOcrOptions({ maxExtraRecognitions: 999 }).maxExtraRecognitions, MAX_EXTRA_RECOGNITIONS);
   assert.equal(normalizeNdlOcrOptions({ maxExtraRecognitions: -1 }).maxExtraRecognitions, 0);
@@ -311,6 +386,7 @@ test("ground truth JSON parser validates line regions", () => {
 test("ground truth keeps raw and normalized text separate", () => {
   const page = parseOcrGroundTruthJson(JSON.stringify({
     id: "page-1",
+    width: 100, height: 100,
     manifestUrl: "https://example.test/manifest",
     canvasId: "canvas-1",
     lines: [{ text: "異体字", normalizedText: "異体字", region: { x: 0, y: 0, width: 1, height: 1 } }],

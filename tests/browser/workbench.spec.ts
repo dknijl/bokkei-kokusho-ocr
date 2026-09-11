@@ -1,6 +1,11 @@
 import { test, expect } from "@playwright/test";
+import { NDL_LATEST_REVISION_URL } from "../../src/lib/ocr/model-source";
+import { NDL_MODEL_REVISION } from "../../src/lib/ocr/model-revision";
 
 test.describe("OCR workbench browser smoke tests", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route(NDL_LATEST_REVISION_URL, route => route.fulfill({ json: { sha: NDL_MODEL_REVISION } }));
+  });
   test("boots with the balanced OCR profile and exposes profile selection", async ({ page }) => {
     await page.goto("http://127.0.0.1:5173/ocr/");
 

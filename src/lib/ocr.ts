@@ -32,10 +32,12 @@ export function buildIiifCropUrl(page: ViewerPage, region: CropRegion): string {
     throw new LocalizedError("errorCropDimensions");
   }
 
-  const x = clamp(Math.round((region.x / 100) * page.width), 0, page.width - 1);
-  const y = clamp(Math.round((region.y / 100) * page.height), 0, page.height - 1);
-  const width = clamp(Math.round((region.width / 100) * page.width), 1, page.width - x);
-  const height = clamp(Math.round((region.height / 100) * page.height), 1, page.height - y);
+  const sourceWidth = page.sourceWidth || page.width;
+  const sourceHeight = page.sourceHeight || page.height;
+  const x = clamp(Math.round((region.x / 100) * sourceWidth), 0, sourceWidth - 1);
+  const y = clamp(Math.round((region.y / 100) * sourceHeight), 0, sourceHeight - 1);
+  const width = clamp(Math.round((region.width / 100) * sourceWidth), 1, sourceWidth - x);
+  const height = clamp(Math.round((region.height / 100) * sourceHeight), 1, sourceHeight - y);
 
   return `${page.imageServiceId.replace(/\/$/, "")}/${x},${y},${width},${height}/!512,512/0/default.jpg`;
 }

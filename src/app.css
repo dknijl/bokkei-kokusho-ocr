@@ -142,8 +142,9 @@ a { color: inherit; text-decoration: none; }
 .rail-add span { font-size: 8px; text-transform: uppercase; letter-spacing: .1em; }
 .rail-add:hover { border-color: var(--cyan); color: #d6ded9; }
 
-.image-stage { min-width: 0; display: grid; grid-template-rows: 54px 1fr 52px; background: #151d1a; overflow: hidden; }
-.viewer-toolbar { display: flex; align-items: center; gap: 18px; padding: 0 18px; border-bottom: 1px solid var(--line); background: #111916; }
+.image-stage { min-width: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) 52px; background: #151d1a; overflow: hidden; }
+.viewer-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; min-height: 54px; padding: 8px 18px; border-bottom: 1px solid var(--line); background: #111916; }
+.viewer-toolbar > * { flex-shrink: 0; }
 .segmented { display: flex; border: 1px solid var(--line); }
 .segmented button { min-width: 68px; height: 30px; border: 0; background: transparent; color: #718078; font-size: 11px; cursor: pointer; }
 .segmented button + button { border-left: 1px solid var(--line); }
@@ -513,7 +514,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
     grid-column: 1;
     grid-row: 3;
   }
-  .image-stage { grid-template-rows: auto minmax(0, 1fr) 52px; }
+  .image-stage { grid-template-rows: auto auto minmax(0, 1fr) 52px; }
   .viewer-toolbar {
     gap: 8px;
     min-height: 54px;
