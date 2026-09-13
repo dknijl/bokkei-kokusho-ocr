@@ -47,6 +47,7 @@ export type ViewerManifest = {
   attribution: string;
   attributionTranslations: LocalizedText;
   license: string;
+  licenseAllowsTranscription: boolean;
   viewingDirection: string;
   recordId: string;
   status: ManifestStatus;
@@ -98,6 +99,34 @@ export const manifestPresets: ManifestPreset[] = [
     detailEn: "Late Edo period · illustrated printed book",
     url: "https://kokusho.nijl.ac.jp/biblio/200011824/manifest",
   },
+  {
+    title: "平家物語",
+    detail: "寛永元年刊 · 軍記物語",
+    detailEn: "Published 1624 · war tale",
+    imageCount: 811,
+    url: "https://kokusho.nijl.ac.jp/biblio/200003072/manifest",
+  },
+  {
+    title: "坐禪儀",
+    detail: "宗賾撰 · 禅宗",
+    detailEn: "By Zongze · Zen",
+    imageCount: 4,
+    url: "https://kokusho.nijl.ac.jp/biblio/200015795/manifest",
+  },
+  {
+    title: "勢州宮崎文庫書目",
+    detail: "書目 · 宮崎文庫",
+    detailEn: "Catalog · Miyazaki Bunko",
+    imageCount: 72,
+    url: "https://kokusho.nijl.ac.jp/biblio/100001026/manifest",
+  },
+  {
+    title: "〔除帳〕，吉田伝七郎",
+    detail: "帳簿 · 吉田家文書",
+    detailEn: "Ledger · Yoshida family document",
+    imageCount: 9,
+    url: "https://kokusho.nijl.ac.jp/biblio/300138266/manifest",
+  },
 ];
 
 const kokushoManifestPattern = /^https:\/\/kokusho\.nijl\.ac\.jp\/biblio\/(\d+)\/manifest\/?$/;
@@ -136,6 +165,7 @@ export const initialManifest: ViewerManifest = {
   attribution: "国文学研究資料館",
   attributionTranslations: { ja: "国文学研究資料館", en: "National Institute of Japanese Literature" },
   license: "https://creativecommons.org/publicdomain/mark/1.0/deed.ja",
+  licenseAllowsTranscription: true,
   viewingDirection: "right-to-left",
   recordId: "200021552",
   status: "ocrNotRun",
@@ -201,7 +231,26 @@ const serviceUrl = (service: unknown): string => {
 const sizedIiifImage = (service: string, fallback: string, width: number) =>
   service ? `${service}/full/${width},/0/default.jpg` : fallback;
 
+const CREATIVE_COMMONS_LICENSE_URL = "https://creativecommons.org/";
+
+function collectLicenseStrings(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(collectLicenseStrings);
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return [record["@id"], record.id, record.value].filter((v): v is string => typeof v === "string");
+  }
+  return [];
+}
+
+export function licenseAllowsTranscription(value: unknown): boolean {
+  return collectLicenseStrings(value).some((license) => license.includes(CREATIVE_COMMONS_LICENSE_URL));
+}
+
 export function parseManifest(raw: Record<string, any>, fallbackUrl: string, locale: Locale = "ja"): ViewerManifest {
+  const licenseValue = Array.isArray(raw.rights) ? raw.rights[0] : raw.rights ?? raw.license;
+  const license = typeof licenseValue === "string" ? licenseValue : "";
+  const transcriptionLicensed = licenseAllowsTranscription(raw.license) || licenseAllowsTranscription(raw.rights);
   const canvases = raw.sequences?.[0]?.canvases ?? raw.items ?? [];
 
   const pages: ViewerPage[] = canvases.map((canvas: Record<string, any>, index: number) => {
@@ -226,15 +275,15 @@ export function parseManifest(raw: Record<string, any>, fallbackUrl: string, loc
       canvasIndex: index,
       canvasId: String(canvas.id ?? canvas["@id"] ?? `${fallbackUrl}#canvas-${index + 1}`),
       imageServiceId,
-      sourceImage: original,
       sourceWidth: Number(body.width ?? 0),
       sourceHeight: Number(body.height ?? 0),
       ocrAvailability: supported ? "supported" : "unsupported",
       unsupportedReason: supported ? undefined : "Canvas has no single full-canvas image; empty or composite canvases are not supported for OCR.",
       label: localizedText(labelTranslations, locale) || String(index + 1),
       labelTranslations: Object.keys(labelTranslations).length ? labelTranslations : { none: String(index + 1) },
-      image: supported ? sizedIiifImage(imageServiceId, original, 1200) : "",
-      thumbnail: supported ? sizedIiifImage(imageServiceId, original, 180) : "",
+      image: supported && transcriptionLicensed ? sizedIiifImage(imageServiceId, original, 1200) : "",
+      thumbnail: supported && transcriptionLicensed ? sizedIiifImage(imageServiceId, original, 180) : "",
+      sourceImage: transcriptionLicensed ? original : "",
       width: Number(canvas.width ?? body.width ?? 0),
       height: Number(canvas.height ?? body.height ?? 0),
       result: [],
@@ -247,7 +296,6 @@ export function parseManifest(raw: Record<string, any>, fallbackUrl: string, loc
 
   const manifestUrl = String(raw.id ?? raw["@id"] ?? fallbackUrl);
   const recordId = manifestUrl.match(/\/biblio\/(\d+)/)?.[1] ?? "EXTERNAL";
-  const licenseValue = Array.isArray(raw.rights) ? raw.rights[0] : raw.rights ?? raw.license;
   const titleTranslations = localizedValues(raw.label);
   const attributionTranslations = localizedValues(raw.requiredStatement?.value ?? raw.attribution);
 
@@ -257,7 +305,8 @@ export function parseManifest(raw: Record<string, any>, fallbackUrl: string, loc
     titleTranslations: Object.keys(titleTranslations).length ? titleTranslations : { none: "無題のIIIF資料" },
     attribution: localizedText(attributionTranslations, locale) || new URL(fallbackUrl).hostname,
     attributionTranslations: Object.keys(attributionTranslations).length ? attributionTranslations : { none: new URL(fallbackUrl).hostname },
-    license: typeof licenseValue === "string" ? licenseValue : "",
+    license,
+    licenseAllowsTranscription: transcriptionLicensed,
     viewingDirection: raw.viewingDirection || "right-to-left",
     recordId,
     status: "iiifLoaded",

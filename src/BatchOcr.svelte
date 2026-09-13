@@ -32,6 +32,7 @@
   let restoreGeneration = 0;
   const workerAvailable = supportsOcrWorker();
   const label = (ja: string, en: string) => locale === "ja" ? ja : en;
+  const transcriptionRestricted = $derived(!manifest.licenseAllowsTranscription);
   const resumable = $derived(job && isNdlModelRevision(job.modelRevision)
     && job.modelRevision === (job.options.modelRevision ?? NDL_MODEL_REVISION) && job.pipelineVersion === OCR_PIPELINE_VERSION);
   const status = $derived(job ? batchProgress(job, running, pausing) : null);
@@ -47,7 +48,7 @@
   $effect(() => {
     const url = manifest.url;
     const active = running;
-    if (active) return;
+    if (active || transcriptionRestricted) return;
     const generation = ++restoreGeneration;
     void latestOcrJob(url).then((saved) => {
       if (generation === restoreGeneration && !running) job = saved;
@@ -69,7 +70,7 @@
   });
 
   async function run(newJob: boolean, retryFailures = false) {
-    if (running || singleRunning || !workerAvailable) return;
+    if (transcriptionRestricted || running || singleRunning || !workerAvailable) return;
     running = true; onBusy(true); error = ""; parts = []; pausing = false; progress = null;
     ++restoreGeneration;
     const snapshot = $state.snapshot(manifest);
@@ -135,16 +136,16 @@
 
 <section class="batch-ocr" aria-label={label("全コマOCR", "Manifest OCR")}>
   <div class="batch-actions">
-    <button type="button" class="batch-start" disabled={running || singleRunning || exporting || !workerAvailable} onclick={() => void run(true)}>{label("全コマをOCR", "OCR all canvases")}</button>
+    <button type="button" class="batch-start" disabled={transcriptionRestricted || running || singleRunning || exporting || !workerAvailable} onclick={() => void run(true)}>{label("全コマをOCR", "OCR all canvases")}</button>
     {#if running}
       <button type="button" disabled={pausing} onclick={pause}>{pausing ? label("保存後に停止…", "Pausing after save…") : label("一時停止", "Pause")}</button>
       <button type="button" onclick={cancel}>{label("中止", "Cancel")}</button>
     {:else if job}
       {#if job.completed < job.total}
-        <button type="button" disabled={singleRunning || exporting || !workerAvailable || !resumable} onclick={() => void run(false)}>{label("再開", "Resume")}</button>
+        <button type="button" disabled={transcriptionRestricted || singleRunning || exporting || !workerAvailable || !resumable} onclick={() => void run(false)}>{label("再開", "Resume")}</button>
       {/if}
       {#if job.failed}
-        <button type="button" disabled={singleRunning || exporting || !workerAvailable || !resumable} onclick={() => void run(false, true)}>{label("失敗コマを再実行", "Retry failed canvases")}</button>
+        <button type="button" disabled={transcriptionRestricted || singleRunning || exporting || !workerAvailable || !resumable} onclick={() => void run(false, true)}>{label("失敗コマを再実行", "Retry failed canvases")}</button>
       {/if}
     {/if}
     {#if job && job.completed > 0}

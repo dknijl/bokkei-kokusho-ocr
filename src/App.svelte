@@ -131,6 +131,7 @@ import {
   let metomCropUrl = $derived(crop && metomSupported ? buildIiifCropUrl(page, crop) : "");
   let manifestTitle = $derived(localizedText(manifest.titleTranslations, locale) || manifest.title);
   let manifestAttribution = $derived(localizedText(manifest.attributionTranslations, locale) || manifest.attribution);
+  let licenseRestricted = $derived(!manifest.licenseAllowsTranscription);
   let pageLabel = $derived(localizedText(page.labelTranslations, locale) || page.label);
   let selectedOcrText = $derived(page.result[selectedLine]?.text ?? "");
   let variantNeedle = $derived(query.trim() || (variantBrowseAll ? "" : selectedOcrText));
@@ -607,6 +608,7 @@ import {
   }
 
   function openMetomPanel() {
+    if (licenseRestricted) return;
     panelTab = "metom";
     metomMode = true;
     overlay = false;
@@ -644,7 +646,7 @@ import {
   }
 
   async function runFullPageOcr() {
-    if (fullOcrRunning || batchRunning || page.ocrAvailability === "unsupported") return;
+    if (fullOcrRunning || batchRunning || page.ocrAvailability === "unsupported" || licenseRestricted) return;
 
     const targetPage = $state.snapshot(page);
     const targetManifestUrl = manifest.url;
@@ -873,6 +875,8 @@ import {
         </small>
       </button>
     {/each}
+  {:else if licenseRestricted}
+    <div class="ocr-empty license-restricted"><strong>{t(locale, "licenseRestricted")}</strong></div>
   {:else}
     <div class="ocr-empty"><strong>{page.ocrEngine ? (locale === "ja" ? "文字行が検出されませんでした" : "No text lines detected") : t(locale, "ocrNotRun")}</strong>{#if !page.ocrEngine}<span>{t(locale, "runOcrInstruction")}</span>{/if}</div>
   {/if}
@@ -901,17 +905,19 @@ import {
     </div>
   </header>
 
-  <section class:show-narrow-ocr={narrowPane === "ocr"} class="workspace" id="viewer">
-    <aside class="page-rail" aria-label={t(locale, "pageList")}>
-      <div class="rail-count">{String(pageIndex + 1).padStart(2, "0")} / {String(manifest.pages.length).padStart(2, "0")}</div>
-      {#each manifest.pages as item, index (`${item.canvasId}-${index}`)}
-        <button type="button" data-page-index={index} class:active={pageIndex === index} class="thumb" style:--thumb-aspect-ratio={thumbnailAspectRatio(item)} onclick={() => selectPage(index)} aria-label={t(locale, "pageNumber", { number: index + 1, label: pageLabelFor(item) })}>
-          {#if item.thumbnail}<img src={item.thumbnail} alt="" loading="lazy" decoding="async" />{/if}
-          <span>{index + 1}</span>
-        </button>
-      {/each}
-      <button type="button" class="rail-add" onclick={() => (pickerOpen = true)}><b>＋</b><span>Manifest</span></button>
-    </aside>
+  <section class:show-narrow-ocr={narrowPane === "ocr"} class:license-restricted={licenseRestricted} class="workspace" id="viewer">
+    {#if !licenseRestricted}
+      <aside class="page-rail" aria-label={t(locale, "pageList")}>
+        <div class="rail-count">{String(pageIndex + 1).padStart(2, "0")} / {String(manifest.pages.length).padStart(2, "0")}</div>
+        {#each manifest.pages as item, index (`${item.canvasId}-${index}`)}
+          <button type="button" data-page-index={index} class:active={pageIndex === index} class="thumb" style:--thumb-aspect-ratio={thumbnailAspectRatio(item)} onclick={() => selectPage(index)} aria-label={t(locale, "pageNumber", { number: index + 1, label: pageLabelFor(item) })}>
+            {#if item.thumbnail}<img src={item.thumbnail} alt="" loading="lazy" decoding="async" />{/if}
+            <span>{index + 1}</span>
+          </button>
+        {/each}
+        <button type="button" class="rail-add" onclick={() => (pickerOpen = true)}><b>＋</b><span>Manifest</span></button>
+      </aside>
+    {/if}
 
     <nav class="narrow-pane-switcher" aria-label={t(locale, "mobilePaneSelector")}>
       <button
@@ -934,67 +940,70 @@ import {
     </nav>
 
     <section class="image-stage" aria-label={t(locale, "viewer")}>
-      <div class="viewer-toolbar">
-        <div class="segmented" aria-label={t(locale, "displayMethod")}>
-          <button type="button" class:active={viewMode === "original"} onclick={() => (viewMode = "original")}>{t(locale, "originalImage")}</button>
-          <button type="button" class:active={viewMode === "contrast"} onclick={() => (viewMode = "contrast")}>{t(locale, "inkEnhanced")}</button>
+      {#if !licenseRestricted}
+        <div class="viewer-toolbar">
+          <div class="segmented" aria-label={t(locale, "displayMethod")}>
+            <button type="button" class:active={viewMode === "original"} onclick={() => (viewMode = "original")}>{t(locale, "originalImage")}</button>
+            <button type="button" class:active={viewMode === "contrast"} onclick={() => (viewMode = "contrast")}>{t(locale, "inkEnhanced")}</button>
+          </div>
+          <label class:disabled={!ocrRegions.length} class="overlay-toggle">
+            <input id="ocr-overlay" name="ocr-overlay" type="checkbox" bind:checked={overlay} disabled={!ocrRegions.length} />
+            <span></span>{ocrRegions.length ? t(locale, "ocrRegions", { count: ocrRegions.length }) : t(locale, "noOcrCoordinates")}
+          </label>
+          <button type="button" class:active={metomMode} class="crop-mode-button" onclick={openMetomPanel}>{t(locale, "selectCharacter")}</button>
+          <label class="ocr-profile-control" for="ocr-profile">
+            <span>{t(locale, "ocrProfile")}</span>
+            <select id="ocr-profile" bind:value={ocrProfile} disabled={fullOcrRunning || batchRunning}>
+              <option value="fast">{t(locale, "ocrProfileFast")}</option>
+              <option value="balanced">{t(locale, "ocrProfileBalanced")}</option>
+              <option value="accurate">{t(locale, "ocrProfileAccurate")}</option>
+            </select>
+          </label>
+          <label class="ocr-profile-control" for="ocr-preprocessing">
+            <span>{locale === "ja" ? "画像補正" : "Image correction"}</span>
+            <select id="ocr-preprocessing" bind:value={imagePreprocessing} disabled={fullOcrRunning || batchRunning}>
+              <option value="auto">{locale === "ja" ? "自動（検証済みのみ）" : "Auto (validated only)"}</option>
+              <option value="off">{locale === "ja" ? "なし" : "Off"}</option>
+            </select>
+          </label>
+          <section class:running={fullOcrRunning} class="toolbar-ocr-action" aria-label={t(locale, "autoOcr")}>
+            {#if fullOcrRunning}
+              <button
+                type="button"
+                class="toolbar-ocr-button cancel-ocr is-loading"
+                onclick={cancelFullOcr}
+                title={fullOcrProgress ? t(locale, fullOcrProgress.messageKey, fullOcrProgress.params) : t(locale, "cancel")}
+                aria-label={fullOcrProgress ? `${t(locale, "cancel")}: ${t(locale, fullOcrProgress.messageKey, fullOcrProgress.params)} ${fullOcrProgress.percent}%` : t(locale, "cancel")}
+              >
+                {#if fullOcrProgress}<span class="toolbar-ocr-fill" style={`width:${fullOcrProgress.percent}%`}></span>{/if}
+                <span class="toolbar-ocr-label"><span>{t(locale, "cancel")}</span>{#if fullOcrProgress}<b>{fullOcrProgress.percent}%</b>{/if}</span>
+              </button>
+            {:else}
+              <button type="button" class="toolbar-ocr-button run-full-ocr" disabled={batchRunning || page.ocrAvailability === "unsupported"} onclick={() => void runFullPageOcr()}>{page.ocrEngine ? t(locale, "rerunPage") : t(locale, "runPage")}</button>
+            {/if}
+          </section>
+          <div class="zoom-control">
+            <button type="button" onclick={() => adjustZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label={t(locale, "zoomOut")}>−</button>
+            <input id="viewer-zoom" name="zoom" aria-label={t(locale, "zoomLevel")} type="range" min={MIN_ZOOM} max={MAX_ZOOM} step="1" bind:value={zoom} />
+            <button type="button" onclick={() => adjustZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label={t(locale, "zoomIn")}>＋</button>
+            <output for="viewer-zoom">{zoom}%</output>
+          </div>
         </div>
-        <label class:disabled={!ocrRegions.length} class="overlay-toggle">
-          <input id="ocr-overlay" name="ocr-overlay" type="checkbox" bind:checked={overlay} disabled={!ocrRegions.length} />
-          <span></span>{ocrRegions.length ? t(locale, "ocrRegions", { count: ocrRegions.length }) : t(locale, "noOcrCoordinates")}
-        </label>
-        <button type="button" class:active={metomMode} class="crop-mode-button" onclick={openMetomPanel}>{t(locale, "selectCharacter")}</button>
-        <label class="ocr-profile-control" for="ocr-profile">
-          <span>{t(locale, "ocrProfile")}</span>
-          <select id="ocr-profile" bind:value={ocrProfile} disabled={fullOcrRunning || batchRunning}>
-            <option value="fast">{t(locale, "ocrProfileFast")}</option>
-            <option value="balanced">{t(locale, "ocrProfileBalanced")}</option>
-            <option value="accurate">{t(locale, "ocrProfileAccurate")}</option>
-          </select>
-        </label>
-        <label class="ocr-profile-control" for="ocr-preprocessing">
-          <span>{locale === "ja" ? "画像補正" : "Image correction"}</span>
-          <select id="ocr-preprocessing" bind:value={imagePreprocessing} disabled={fullOcrRunning || batchRunning}>
-            <option value="auto">{locale === "ja" ? "自動（検証済みのみ）" : "Auto (validated only)"}</option>
-            <option value="off">{locale === "ja" ? "なし" : "Off"}</option>
-          </select>
-        </label>
-        <section class:running={fullOcrRunning} class="toolbar-ocr-action" aria-label={t(locale, "autoOcr")}>
-          {#if fullOcrRunning}
-            <button
-              type="button"
-              class="toolbar-ocr-button cancel-ocr is-loading"
-              onclick={cancelFullOcr}
-              title={fullOcrProgress ? t(locale, fullOcrProgress.messageKey, fullOcrProgress.params) : t(locale, "cancel")}
-              aria-label={fullOcrProgress ? `${t(locale, "cancel")}: ${t(locale, fullOcrProgress.messageKey, fullOcrProgress.params)} ${fullOcrProgress.percent}%` : t(locale, "cancel")}
-            >
-              {#if fullOcrProgress}<span class="toolbar-ocr-fill" style={`width:${fullOcrProgress.percent}%`}></span>{/if}
-              <span class="toolbar-ocr-label"><span>{t(locale, "cancel")}</span>{#if fullOcrProgress}<b>{fullOcrProgress.percent}%</b>{/if}</span>
-            </button>
-          {:else}
-            <button type="button" class="toolbar-ocr-button run-full-ocr" disabled={batchRunning || page.ocrAvailability === "unsupported"} onclick={() => void runFullPageOcr()}>{page.ocrEngine ? t(locale, "rerunPage") : t(locale, "runPage")}</button>
-          {/if}
-        </section>
-        <div class="zoom-control">
-          <button type="button" onclick={() => adjustZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label={t(locale, "zoomOut")}>−</button>
-          <input id="viewer-zoom" name="zoom" aria-label={t(locale, "zoomLevel")} type="range" min={MIN_ZOOM} max={MAX_ZOOM} step="1" bind:value={zoom} />
-          <button type="button" onclick={() => adjustZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label={t(locale, "zoomIn")}>＋</button>
-          <output for="viewer-zoom">{zoom}%</output>
-        </div>
-      </div>
 
-      <BatchOcr {manifest} options={activeOcrOptions()} currentCanvasId={page.canvasId} singleRunning={fullOcrRunning} {locale}
-        onBusy={(value) => { batchRunning = value; }}
-        onPageResult={(url, sourcePage, result) => {
-          if (url !== manifest.url || page.canvasId !== sourcePage.canvasId || page.imageServiceId !== sourcePage.imageServiceId
-            || (page.sourceImage || page.image) !== (sourcePage.sourceImage || sourcePage.image)) return;
-          applyOcrResult({ manifest, targetManifestUrl: url, targetCanvasId: sourcePage.canvasId, result });
-          overlay = result.lines.length > 0;
-        }} />
+        <BatchOcr {manifest} options={activeOcrOptions()} currentCanvasId={page.canvasId} singleRunning={fullOcrRunning} {locale}
+          onBusy={(value) => { batchRunning = value; }}
+          onPageResult={(url, sourcePage, result) => {
+            if (url !== manifest.url || page.canvasId !== sourcePage.canvasId || page.imageServiceId !== sourcePage.imageServiceId
+              || (page.sourceImage || page.image) !== (sourcePage.sourceImage || sourcePage.image)) return;
+            applyOcrResult({ manifest, targetManifestUrl: url, targetCanvasId: sourcePage.canvasId, result });
+            overlay = result.lines.length > 0;
+          }} />
+      {/if}
       <div class="canvas-wrap">
         <div class:contrast={viewMode === "contrast"} class="manuscript" style:width={`${zoom}%`}>
           {#key page.image}
             {#if page.image}<img src={page.image} alt={t(locale, "imageAlt", { title: manifestTitle, label: pageLabel })} />
+            {:else if licenseRestricted}<p class="ocr-empty license-restricted">{t(locale, "licenseRestricted")}</p>
             {:else}<p class="ocr-empty">{locale === "ja" ? "このコマの画像構成はOCRに未対応です。元の番号を保持しています。" : "This canvas is unsupported for OCR. Its original number is preserved."}</p>{/if}
           {/key}
           {#if overlay && ocrRegions.length}
@@ -1037,11 +1046,13 @@ import {
         </div>
       </div>
 
-      <div class="page-controls">
-        <button type="button" onclick={() => movePage(-1)} disabled={pageIndex === 0}>{t(locale, "previous")}</button>
-        <span><strong>{pageIndex + 1}</strong> / {manifest.pages.length}</span>
-        <button type="button" onclick={() => movePage(1)} disabled={pageIndex === manifest.pages.length - 1}>{t(locale, "next")}</button>
-      </div>
+      {#if !licenseRestricted}
+        <div class="page-controls">
+          <button type="button" onclick={() => movePage(-1)} disabled={pageIndex === 0}>{t(locale, "previous")}</button>
+          <span><strong>{pageIndex + 1}</strong> / {manifest.pages.length}</span>
+          <button type="button" onclick={() => movePage(1)} disabled={pageIndex === manifest.pages.length - 1}>{t(locale, "next")}</button>
+        </div>
+      {/if}
     </section>
 
     <aside class="text-panel">
@@ -1060,7 +1071,7 @@ import {
       <div class="panel-tabs three" role="tablist">
         <button type="button" class:active={panelTab === "text"} onclick={() => { panelTab = "text"; metomMode = false; }} role="tab" aria-selected={panelTab === "text"}>{t(locale, "transcription")}</button>
         <button type="button" class:active={panelTab === "variants"} onclick={() => { panelTab = "variants"; metomMode = false; }} role="tab" aria-selected={panelTab === "variants"}>{t(locale, "variants")} <span>{itaijiSource.pairCount}</span></button>
-        <button type="button" class:active={panelTab === "metom"} onclick={openMetomPanel} role="tab" aria-selected={panelTab === "metom"}>{t(locale, "singleCharacterOcr")}</button>
+        {#if !licenseRestricted}<button type="button" class:active={panelTab === "metom"} onclick={openMetomPanel} role="tab" aria-selected={panelTab === "metom"}>{t(locale, "singleCharacterOcr")}</button>{/if}
       </div>
 
       {#if panelTab === "text"}

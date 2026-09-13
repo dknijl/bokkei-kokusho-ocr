@@ -9,6 +9,7 @@ const manifestUrl = "https://kokusho.nijl.ac.jp/biblio/200021552/manifest";
 const service = "https://example.test/iiif";
 const manifest = {
   id: manifestUrl, type: "Manifest", label: { ja: ["一括OCR試験"] }, viewingDirection: "right-to-left",
+  license: "https://creativecommons.org/publicdomain/mark/1.0/",
   items: Array.from({ length: 5 }, (_, index) => ({
     id: `${manifestUrl}/canvas/${index + 1}`, type: "Canvas", width: 1000, height: 2000, label: { ja: [`コマ${index + 1}`] },
     items: [{ type: "AnnotationPage", items: index === 1 ? [] : [{ motivation: "painting", body: {
