@@ -5,6 +5,9 @@ import { NDL_MODEL_REVISION } from "../../src/lib/ocr/model-revision";
 test.describe("OCR workbench browser smoke tests", () => {
   test.beforeEach(async ({ page }) => {
     await page.route(NDL_LATEST_REVISION_URL, route => route.fulfill({ json: { sha: NDL_MODEL_REVISION } }));
+    await page.addInitScript(() => {
+      try { window.localStorage.setItem("bokkei-service-notice-accepted", "true"); } catch { /* ignore */ }
+    });
   });
   test("boots with the balanced OCR profile and exposes profile selection", async ({ page }) => {
     await page.goto("http://127.0.0.1:5173/ocr/");
@@ -40,6 +43,21 @@ test.describe("OCR workbench browser smoke tests", () => {
     await expect(page.locator("#ocr-profile")).toBeVisible();
     await page.locator(".narrow-pane-switcher button").nth(1).click();
     await expect(page.locator(".text-panel")).toBeVisible();
+  });
+
+  test("shows the full run-OCR label in English without clipping", async ({ page }) => {
+    await page.addInitScript(() => {
+      try { window.localStorage.setItem("bokkei-locale", "en"); } catch { /* ignore */ }
+    });
+    await page.goto("http://127.0.0.1:5173/ocr/");
+    const button = page.locator("button.run-full-ocr");
+    await expect(button).toContainText("Run automatic OCR on this page");
+    const overflow = await button.evaluate((element) => element.scrollWidth - element.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const narrowOverflow = await button.evaluate((element) => element.scrollWidth - element.clientWidth);
+    expect(narrowOverflow).toBeLessThanOrEqual(1);
   });
 
   test("cancels page OCR while model loading is pending", async ({ page }) => {

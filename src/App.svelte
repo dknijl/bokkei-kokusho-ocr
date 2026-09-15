@@ -68,6 +68,10 @@ import {
   let hasLoadedManifest = false;
   const selectedCanvasStorageKey = "bokkei-selected-canvas";
   const ocrTextSizeStorageKey = "bokkei-ocr-text-size";
+  const serviceNoticeStorageKey = "bokkei-service-notice-accepted";
+  let serviceNoticeVisible = $state(false);
+  let serviceNoticeStorageFailed = $state(false);
+  let serviceNoticeAgreeButton: HTMLButtonElement | null = $state(null);
   const MIN_OCR_TEXT_SIZE = 14;
   const MAX_OCR_TEXT_SIZE = 28;
   const OCR_TEXT_SIZE_STEP = 1;
@@ -217,6 +221,30 @@ import {
       // Use the default size when persisted preferences cannot be read.
     }
   }
+
+  function restoreServiceNotice(): void {
+    try {
+      serviceNoticeVisible = window.localStorage.getItem(serviceNoticeStorageKey) !== "true";
+    } catch {
+      // Storage can be unavailable in private or restricted browsing contexts.
+      serviceNoticeStorageFailed = true;
+      serviceNoticeVisible = true;
+    }
+  }
+
+  function acceptServiceNotice(): void {
+    try {
+      window.localStorage.setItem(serviceNoticeStorageKey, "true");
+    } catch {
+      // Continue for this session; the notice appears again next time.
+      serviceNoticeStorageFailed = true;
+    }
+    serviceNoticeVisible = false;
+  }
+
+  $effect(() => {
+    if (serviceNoticeVisible) serviceNoticeAgreeButton?.focus();
+  });
 
   function pageLabelFor(item: ViewerPage): string {
     return localizedText(item.labelTranslations, locale) || item.label;
@@ -510,6 +538,7 @@ import {
 
   onMount(() => {
     restoreOcrResultFontSize();
+    restoreServiceNotice();
     try {
       const storedLocale = window.localStorage.getItem("bokkei-locale");
       if (isLocale(storedLocale)) locale = storedLocale;
@@ -1214,6 +1243,25 @@ import {
       </footer>
     </aside>
   </section>
+
+  {#if serviceNoticeVisible}
+    <div class="service-notice-backdrop">
+      <div class="service-notice-dialog" role="dialog" aria-modal="true" aria-labelledby="service-notice-title">
+        <header class="service-notice-head">
+          <span class="eyebrow">BOKKEI / KOTEN OCR SERVICE</span>
+          <h2 id="service-notice-title">{t(locale, "serviceNoticeTitle")}</h2>
+        </header>
+        <div class="service-notice-body">
+          <p lang="ja">{t(locale, "serviceNoticeBodyJa")}</p>
+          <p lang="en">{t(locale, "serviceNoticeBodyEn")}</p>
+          {#if serviceNoticeStorageFailed}<p class="service-notice-warning">{t(locale, "serviceNoticeStorageWarning")}</p>{/if}
+        </div>
+        <footer class="service-notice-foot">
+          <button type="button" class="service-notice-agree" bind:this={serviceNoticeAgreeButton} onclick={acceptServiceNotice}>{t(locale, "serviceNoticeAgree")}</button>
+        </footer>
+      </div>
+    </div>
+  {/if}
 
   {#if ocrTextExpanded}
     <div

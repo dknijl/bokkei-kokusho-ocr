@@ -8,6 +8,9 @@ test("built application performs real OCR with the emitted worker and WASM asset
   await page.setViewportSize({ width: 1920, height: 1080 });
   // Exercise the real Blob download path; headless Chromium cannot choose a native save destination.
   await page.addInitScript(() => Object.defineProperty(window, "showSaveFilePicker", { value: undefined, configurable: true }));
+  await page.addInitScript(() => {
+    try { window.localStorage.setItem("bokkei-service-notice-accepted", "true"); } catch { /* ignore */ }
+  });
   const manifest = JSON.parse(await readFile("work/ocr-evaluation/manuscript-manifest.json", "utf8"));
   await context.route(NDL_LATEST_REVISION_URL, route => route.fulfill({ json: { sha: NDL_MODEL_REVISION } }));
   await context.route("https://kokusho.nijl.ac.jp/biblio/200021552/manifest", route => route.fulfill({ json: manifest }));

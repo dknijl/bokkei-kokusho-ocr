@@ -21,6 +21,9 @@ const manifest = {
 
 async function setup(page: Page, failThird = false, settings: { delay?: number; supportedOnly?: boolean } = {}) {
   await page.route(NDL_LATEST_REVISION_URL, route => route.fulfill({ json: { sha: NDL_MODEL_REVISION } }));
+  await page.addInitScript(() => {
+    try { window.localStorage.setItem("bokkei-service-notice-accepted", "true"); } catch { /* ignore */ }
+  });
   const fixture = settings.supportedOnly ? { ...manifest, items: manifest.items.filter((_, index) => index !== 1) } : manifest;
   await page.route(manifestUrl, (route) => route.fulfill({ json: fixture }));
   await page.route("https://example.test/**/info.json", (route) => route.fulfill({ json: {
