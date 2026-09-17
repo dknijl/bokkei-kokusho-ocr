@@ -1,4 +1,7 @@
-import type { NdlOcrResult } from "../ndl-ocr.ts";
+import type { PageOcrResult, OcrExecutionIdentity } from "./engine/types.ts";
+import { ndlExecutionIdentity } from "./engine/pin-request.ts";
+import { ndlPageResult } from "./engine/result.ts";
+import { pageOcrCacheKey } from "./engine/cache-identity.ts";
 import type { ViewerPage } from "../iiif.ts";
 import type { NdlOcrOptions } from "./profiles.ts";
 
@@ -7,8 +10,9 @@ const DATABASE_VERSION = 2;
 const STORE_NAME = "page-results";
 
 export type OcrCacheKeyInput = {
-  modelRevision: string;
-  pipelineVersion: string;
+  identity?: OcrExecutionIdentity;
+  modelRevision?: string;
+  pipelineVersion?: string;
   manifestUrl: string;
   canvasId: string;
   imageServiceId: string;
@@ -21,7 +25,7 @@ export type OcrCacheKeyInput = {
   options: NdlOcrOptions;
 };
 
-export type OcrCacheEntry = NdlOcrResult & {
+export type OcrCacheEntry = PageOcrResult & {
   key: string;
   manifestUrl: string;
   canvasId: string;
@@ -40,6 +44,7 @@ function stableValue(value: unknown): unknown {
 }
 
 export function buildOcrCacheKey(input: OcrCacheKeyInput): string {
+  if (input.identity) return pageOcrCacheKey({ ...input, identity: input.identity });
   const optionsValue = stableValue(input.options);
   return JSON.stringify([
     input.modelRevision,
@@ -62,8 +67,10 @@ export function buildOcrCacheKeyForPage(
   modelRevision: string,
   pipelineVersion: string,
   options: NdlOcrOptions,
+  identity?: OcrExecutionIdentity,
 ): string {
   return buildOcrCacheKey({
+    identity,
     modelRevision,
     pipelineVersion,
     manifestUrl,
@@ -124,7 +131,7 @@ export function cacheEntryFromResult(
   key: string,
   page: ViewerPage,
   manifestUrl: string,
-  result: NdlOcrResult,
+  result: PageOcrResult,
 ): OcrCacheEntry {
   return {
     ...result,
@@ -136,7 +143,7 @@ export function cacheEntryFromResult(
   };
 }
 
-export function resultFromOcrCache(entry: OcrCacheEntry): NdlOcrResult {
+export function resultFromOcrCache(entry: OcrCacheEntry): PageOcrResult {
   const {
     key: _key,
     manifestUrl: _manifestUrl,
@@ -150,7 +157,16 @@ export function resultFromOcrCache(entry: OcrCacheEntry): NdlOcrResult {
 
 export async function readOcrCache(key: string): Promise<OcrCacheEntry | null> {
   try {
-    return (await withStore<OcrCacheEntry>("readonly", (store) => store.get(key))) ?? null;
+    const current = await withStore<OcrCacheEntry>('readonly', store => store.get(key));
+    if (current) return current;
+    const fields = JSON.parse(key);
+    if (fields[0] !== 'bokkei-page-ocr-v2' || fields[1] !== 'ndl-parseq' || fields[2] !== fields[3] || fields[4]) return null;
+    const legacyKey = JSON.stringify([fields[2], fields[5], fields[6], fields[7], fields[8], 'ndl-parseq', ...fields.slice(9)]);
+    const legacy = await withStore<OcrCacheEntry>('readonly', store => store.get(legacyKey));
+    if (!legacy || legacy.revision !== fields[2] || legacy.pipelineVersion !== fields[5] || legacy.identity && legacy.identity.engineId !== 'ndl-parseq') return null;
+    const upgraded = { ...legacy, ...ndlPageResult(legacy as import('../ndl-ocr.ts').NdlOcrResult), key };
+    await writeOcrCache(upgraded);
+    return upgraded;
   } catch (error) {
     console.warn("OCR cache read failed.", error);
     return null;

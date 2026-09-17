@@ -15,13 +15,13 @@
     type CropRegion,
     type MetomPrediction,
   } from "./lib/ocr";
-  import {
-    type NdlOcrResult,
-    type NdlOcrProgress,
-  } from "./lib/ndl-ocr";
+  import { executeOcrPage, type PageOcrResult, type PageOcrProgress } from './lib/page-ocr';
+  import { OCR_ENGINES, canRunHonkoku, normalizeOcrEngine } from './lib/ocr/engine/registry';
+  import type { OcrEngineId } from './lib/ocr/types';
+  import { pinPageOcrRequest } from './lib/ocr/engine/pin-request';
+  import { confidencePresentation, recognitionAveragePercent, isAutoregressiveLine, generationScore, generationAverageScore } from './lib/ocr/confidence-presentation';
 import {
   DEFAULT_NDL_OCR_OPTIONS,
-  recognitionRetryThresholdForProfile,
   type NdlOcrOptions,
   type OcrProfile,
 } from "./lib/ocr/profiles";
@@ -55,8 +55,7 @@ import {
   } from "./lib/i18n";
 
   import BatchOcr from "./BatchOcr.svelte";
-  import { executeOcrPage } from "./lib/ocr/worker-client";
-  import { resolveLatestNdlModelRevision } from "./lib/ocr/model-source";
+  import { disposeOcrWorker } from "./lib/ocr/worker-client";
   let batchRunning = $state(false);
   let imagePreprocessing: "off" | "auto" = $state("auto");
 
@@ -99,12 +98,21 @@ import {
   let metomLoading = $state(false);
   let metomError = $state<unknown>(null);
   let fullOcrRunning = $state(false);
-  let fullOcrProgress = $state<NdlOcrProgress | null>(null);
+  let fullOcrProgress = $state<PageOcrProgress | null>(null);
   let fullOcrError = $state<unknown>(null);
   let ocrAbortController = $state<AbortController | null>(null);
   let ocrTextExpanded = $state(false);
   let ocrResultFontSize = $state(DEFAULT_OCR_TEXT_SIZE);
   let ocrProfile: OcrProfile = $state("balanced");
+  let ocrEngine: OcrEngineId = $state('ndl-parseq');
+  const honkokuAvailable = canRunHonkoku();
+  let modelDownloadBytes = $state<number | undefined>(undefined);
+  function changeOcrEngine(event: Event): void {
+    ocrEngine = normalizeOcrEngine((event.currentTarget as HTMLSelectElement).value, honkokuAvailable);
+    disposeOcrWorker();
+    modelDownloadBytes = undefined;
+    try { localStorage.setItem('bokkei-ocr-engine', ocrEngine); } catch { /* Optional preference. */ }
+  }
   let benchmarkGroundTruthText = $state("");
   let benchmarkGroundTruthError = $state("");
   let benchmarkMetrics = $state<OcrPageMetrics | null>(null);
@@ -115,11 +123,8 @@ import {
     pageIndex,
     canvasId: manifest.pages[pageIndex]?.canvasId,
   }));
-  let average = $derived(
-    page.result.length
-      ? Math.round(page.result.reduce((sum, line) => sum + (line.recognitionScore ?? line.detectionScore), 0) / page.result.length * 100)
-      : 0,
-  );
+  let generationResult = $derived(page.ocrIdentity?.engineId === 'honkoku-v19' || page.result.some(isAutoregressiveLine));
+  let average = $derived(generationResult ? generationAverageScore(page.result) : recognitionAveragePercent(page.result));
   let detectionAverage = $derived(
     page.result.length
       ? Math.round(page.result.reduce((sum, line) => sum + line.detectionScore, 0) / page.result.length * 100)
@@ -157,19 +162,20 @@ import {
   }
 
   function lineIsLowConfidence(line: typeof page.result[number]): boolean {
-    return line.recognitionScore === undefined
-      || line.recognitionScore < recognitionRetryThresholdForProfile(ocrProfile)
-      || line.minimumTokenScore !== undefined && line.minimumTokenScore < 0.28
-      || line.meanTokenMargin !== undefined && line.meanTokenMargin < 0.35
-      || line.endedWithEos === false
-      || line.uncertain === true;
+    return confidencePresentation(line, page.ocrProfile ?? ocrProfile).reviewNeeded;
+  }
+
+  function generationScoreText(score: number | undefined): string {
+    return score === undefined ? '—' : String(Math.round(score * 10) / 10);
   }
 
   function lineScoreSummary(line: typeof page.result[number]): string {
-    return t(locale, "lineScores", {
-      recognition: scorePercent(line.recognitionScore),
-      detection: scorePercent(line.detectionScore),
-    });
+    if (isAutoregressiveLine(line)) {
+      return t(locale, 'generationLineScores', {
+        generation: generationScoreText(generationScore(line)), detection: scorePercent(line.detectionScore),
+      });
+    }
+    return t(locale, 'lineScores', { recognition: scorePercent(line.recognitionScore), detection: scorePercent(line.detectionScore) });
   }
 
   function activeOcrOptions(): NdlOcrOptions {
@@ -538,6 +544,7 @@ import {
 
   onMount(() => {
     restoreOcrResultFontSize();
+    try { ocrEngine = normalizeOcrEngine(localStorage.getItem('bokkei-ocr-engine'), honkokuAvailable); } catch { /* Use NDL by default. */ }
     restoreServiceNotice();
     try {
       const storedLocale = window.localStorage.getItem("bokkei-locale");
@@ -681,6 +688,7 @@ import {
     const targetManifestUrl = manifest.url;
     const targetCanvasId = targetPage.canvasId;
     const ocrOptions = activeOcrOptions();
+    const selectedEngine = ocrEngine;
     const startedAt = Date.now();
     const controller = new AbortController();
     let pendingOcr: PendingOcrMarker | null = null;
@@ -699,8 +707,7 @@ import {
     });
     viewerDebug.log("ocr-start", { canvasId: targetCanvasId });
     try {
-      ocrOptions.modelRevision = await resolveLatestNdlModelRevision(controller.signal);
-      const applyResult = (result: NdlOcrResult): boolean => {
+      const applyResult = (result: PageOcrResult): boolean => {
         if (controller.signal.aborted) {
           viewerDebug.log("ocr-cancelled", { canvasId: targetCanvasId, reason: "aborted" });
           return false;
@@ -735,9 +742,11 @@ import {
         return true;
       };
 
+      const pinnedRequest = await pinPageOcrRequest({ engineId: selectedEngine, options: ocrOptions }, controller.signal);
+      modelDownloadBytes = pinnedRequest.modelDownloadBytes;
       const result = await executeOcrPage(
         targetPage,
-        ocrOptions,
+        pinnedRequest,
         (progress) => {
           if (ocrAbortController === controller) {
             fullOcrProgress = progress;
@@ -899,7 +908,7 @@ import {
         <span>{line.text || t(locale, "unreadable")}</span>
         <small class:low={lowConfidence} title={scoreSummary} aria-label={scoreSummary}>
           {#if lowConfidence}<span>{locale === "ja" ? "要確認" : "Review needed"}</span>{/if}
-          <span>{t(locale, "recognitionShort")} {scorePercent(line.recognitionScore)}</span>
+          <span>{isAutoregressiveLine(line) ? t(locale, 'generationShort') : t(locale, 'recognitionShort')} {isAutoregressiveLine(line) ? generationScoreText(generationScore(line)) : scorePercent(line.recognitionScore)}</span>
           <span>{t(locale, "detectionShort")} {scorePercent(line.detectionScore)}</span>
         </small>
       </button>
@@ -980,6 +989,16 @@ import {
             <span></span>{ocrRegions.length ? t(locale, "ocrRegions", { count: ocrRegions.length }) : t(locale, "noOcrCoordinates")}
           </label>
           <button type="button" class:active={metomMode} class="crop-mode-button" onclick={openMetomPanel}>{t(locale, "selectCharacter")}</button>
+          <label class="ocr-profile-control" for="ocr-engine">
+            <span>{t(locale, 'ocrEngine')}</span>
+            <select id="ocr-engine" value={ocrEngine} onchange={changeOcrEngine} disabled={fullOcrRunning || batchRunning}
+              title={t(locale, ocrEngine === 'honkoku-v19' ? 'ocrEngineHonkokuDetail' : 'ocrEngineNdlDetail')}>
+              {#each OCR_ENGINES as engine}
+                <option value={engine.id} disabled={engine.id === 'honkoku-v19' && !honkokuAvailable}>{t(locale, engine.labelKey)}</option>
+              {/each}
+            </select>
+          </label>
+          {#if !honkokuAvailable}<small class="ocr-engine-unavailable">{t(locale, 'ocrEngineUnavailable')}</small>{/if}
           <label class="ocr-profile-control" for="ocr-profile">
             <span>{t(locale, "ocrProfile")}</span>
             <select id="ocr-profile" bind:value={ocrProfile} disabled={fullOcrRunning || batchRunning}>
@@ -1019,7 +1038,7 @@ import {
           </div>
         </div>
 
-        <BatchOcr {manifest} options={activeOcrOptions()} currentCanvasId={page.canvasId} singleRunning={fullOcrRunning} {locale}
+        <BatchOcr {manifest} engineId={ocrEngine} options={activeOcrOptions()} currentCanvasId={page.canvasId} singleRunning={fullOcrRunning} {locale}
           onBusy={(value) => { batchRunning = value; }}
           onPageResult={(url, sourcePage, result) => {
             if (url !== manifest.url || page.canvasId !== sourcePage.canvasId || page.imageServiceId !== sourcePage.imageServiceId
@@ -1088,7 +1107,13 @@ import {
       <div class="panel-head">
         <div><span class="eyebrow">{t(locale, "recognitionResult")}</span><h1>{t(locale, "ocrHeading")}</h1></div>
         <div class="score-summary">
-          <div class="confidence-ring" title={t(locale, "recognitionScore")} style={`--score: ${average * 3.6}deg`}><strong>{average}</strong><small>%</small></div>
+          <div class="confidence-ring"
+            title={generationResult ? t(locale, 'generationScoreHelp') : t(locale, 'recognitionScore')}
+            aria-label={generationResult ? `${t(locale, 'generationScore')}: ${generationScoreText(average)} / 100` : `${t(locale, 'recognitionScore')}: ${average ?? '—'}%`}
+            style={`--score: ${(average ?? 0) * 3.6}deg`}>
+            <strong>{generationResult ? generationScoreText(average) : average ?? '—'}</strong>
+            <small>{generationResult ? t(locale, 'generationShort') : average === undefined ? t(locale, 'ocrConfidenceUnavailable') : '%'}</small>
+          </div>
           <small>{t(locale, "detectionScore")} {detectionAverage}%</small>
         </div>
       </div>
@@ -1121,7 +1146,7 @@ import {
             {/if}
             {#if !ocrTextExpanded}{@render ocrResultList()}{/if}
           </div>
-          <p class="demo-note">{page.ocrEngine ? t(locale, "ocrConfidenceNote", { engine: page.ocrEngine, provider: page.ocrProvider ?? "" }) : t(locale, "ocrDeviceDescription")}</p>
+          <p class="demo-note">{page.ocrEngine ? t(locale, generationResult ? "ocrGenerationConfidenceNote" : "ocrConfidenceNote", { engine: page.ocrEngine, provider: page.ocrProvider ?? "" }) : t(locale, "ocrDeviceDescription")}</p>
           {#if page.result.length && viewerDebug.enabled}
             <div class="benchmark-export" aria-label={t(locale, "benchmarkExport")}>
               <span>{t(locale, "benchmarkExport")}</span>
@@ -1220,10 +1245,16 @@ import {
       <div class="analysis-card">
         <div class="analysis-title"><span>{t(locale, "recognitionConditions")}</span><strong>{countLabel(locale, page.result.length, "line")}</strong></div>
         <dl>
-          <div><dt>{t(locale, "ocrModel")}</dt><dd>NDL古典籍OCR-Lite</dd></div>
+          <div><dt>{t(locale, "ocrModel")}</dt><dd>{page.ocrEngine ?? t(locale, ocrEngine === 'honkoku-v19' ? 'ocrEngineHonkoku' : 'ocrEngineNdl')}</dd></div>
           <div><dt>{t(locale, "iiifInput")}</dt><dd>Canvas / Image Service</dd></div>
           <div><dt>{t(locale, "ocrOutput")}</dt><dd>{t(locale, "coordinateText")}</dd></div>
         </dl>
+        <div class="ocr-model-summary">
+          <p class="ocr-model-detail">{t(locale, ocrEngine === 'honkoku-v19' ? 'ocrEngineHonkokuDetail' : 'ocrEngineNdlDetail')}</p>
+          {#if ocrEngine === 'honkoku-v19' && modelDownloadBytes}
+            <p class="ocr-model-download">{locale === 'ja' ? 'モデル一覧の合計（全実行方式）' : 'Manifest total (all providers)'}: {Math.ceil(modelDownloadBytes / 1048576)} MiB</p>
+          {/if}
+        </div>
       </div>
 
       <aside class="ndl-usage-notice" aria-label={t(locale, "ndlUsage")}>
@@ -1235,6 +1266,7 @@ import {
           <a href="https://github.com/ndl-lab/ndlkotenocr-lite/blob/master/LICENCE" target="_blank" rel="noreferrer">{t(locale, "terms")}</a>
           <br />{t(locale, "variantSoftware")} · <a href={itaijiSource.repository} target="_blank" rel="noreferrer">{t(locale, "github")}</a>
         </p>
+        <p class="ocr-model-license"><a href="https://huggingface.co/yuta1984/honkoku-ocr" target="_blank" rel="noreferrer">みんなで翻刻OCR v19</a> · <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noreferrer">CC BY-SA 4.0</a></p>
       </aside>
 
       <footer class="source-note">

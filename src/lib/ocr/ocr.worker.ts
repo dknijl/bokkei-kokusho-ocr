@@ -1,3 +1,5 @@
+import { validatePinnedPageOcrRequest } from './engine/pin-request.ts';
+import { ndlPageResult, assertResultIdentity } from './engine/result.ts';
 import { recognizePageWithNdlLite } from "../ndl-ocr.ts";
 import { OcrFailure } from "./network.ts";
 import type { WorkerRequest, WorkerResponse } from "./worker-protocol.ts";
@@ -8,7 +10,10 @@ const worker = self as unknown as {
 };
 worker.onmessage = async ({ data }) => {
   try {
-    const result = await recognizePageWithNdlLite(data.page, data.options, (progress) => worker.postMessage({ id: data.id, type: "progress", progress }));
+    validatePinnedPageOcrRequest(data.request);
+    if (data.request.engineId !== 'ndl-parseq') throw new Error('Wrong OCR worker.');
+    const result = ndlPageResult(await recognizePageWithNdlLite(data.page, data.request.options, (progress) => worker.postMessage({ id: data.id, type: 'progress', progress })));
+    assertResultIdentity(result, data.request);
     worker.postMessage({ id: data.id, type: "result", result });
   } catch (error) {
     worker.postMessage({ id: data.id, type: "error", error: {

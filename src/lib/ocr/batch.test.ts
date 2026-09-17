@@ -11,20 +11,23 @@ import { planZipParts, writeJobZip } from "./zip-export.ts";
 import { scheduleRetries, APPROVED_IMAGE_CORRECTIONS, type RetryTarget } from "./retry-policy.ts";
 import { sauvolaImage } from "./preprocessing.ts";
 import { evaluateOcrPage } from "./metrics.ts";
-import type { NdlOcrResult } from "../ndl-ocr.ts";
+import type { PageOcrResult } from "./engine/types.ts";
+import { ndlExecutionIdentity } from "./engine/pin-request.ts";
+import { migrateOcrJob } from "./batch.ts";
 import { buildOcrCacheKeyForPage } from "./cache.ts";
 import type { ViewerPage } from "../iiif.ts";
 
-const options = normalizeNdlOcrOptions();
+const options = normalizeNdlOcrOptions({ modelRevision: NDL_MODEL_REVISION });
+const identity = ndlExecutionIdentity(NDL_MODEL_REVISION);
 const page = (index: number): ViewerPage => ({ canvasId: `canvas/${index}`, canvasIndex: index, imageServiceId: "", image: `https://example.test/${index}.png`,
   label: `コマ${index + 1}`, labelTranslations: {}, thumbnail: "", width: 1000, height: 2000, result: [] });
-const result = (text = "𠮷野の山\n"): NdlOcrResult => ({ imageWidth: 1000, imageHeight: 2000,
+const result = (text = "𠮷野の山\n"): PageOcrResult => ({ identity, imageWidth: 1000, imageHeight: 2000,
   lines: text ? [{ text, detectionScore: 0.9, readingOrder: 0 }] : [], provider: "WASM", revision: NDL_MODEL_REVISION,
   pipelineVersion: OCR_PIPELINE_VERSION, profile: "balanced", options,
   stats: { detectionCount: 1, modelInferenceCount: 2, initialRecognitions: 1, extraRecognitions: 0, extraRecognitionAttempts: 0,
     adaptiveTiles: 0, highResolutionRetries: 0, additionalCropRequests: 0, additionalCropFailures: 0, maxCanvasPixels: 2000000, durationMs: 1 } });
 function fixture(total: number) {
-  const job: OcrJob = { id: "job", manifestUrl: "https://example.test/manifest", title: "資料", recordId: "1", modelRevision: NDL_MODEL_REVISION,
+  const job: OcrJob = { schemaVersion: 2, identity, request: { schemaVersion: 1, engineId: 'ndl-parseq', options, expectedIdentity: identity }, id: "job", manifestUrl: "https://example.test/manifest", title: "資料", recordId: "1", modelRevision: NDL_MODEL_REVISION,
     pipelineVersion: OCR_PIPELINE_VERSION, options, total, completed: 0, failed: 0, nextIndex: 0, status: "ready", createdAt: 0, updatedAt: 0 };
   const rows: OcrJobPage[] = Array.from({ length: total }, (_, index) => ({ jobId: job.id, index, page: page(index), status: "pending" }));
   let saved = structuredClone(job);
@@ -156,23 +159,25 @@ test("model failure stops the job and version mismatch prevents mixing results",
   const f = fixture(2); let calls = 0;
   await assert.rejects(new BatchController().run(f.job, { ...f.dependencies, recognize: async () => { calls++; throw new OcrFailure("model failed", "model"); } }), /model failed/);
   assert.equal(calls, 1); assert.equal(f.saved().completed, 0);
-  await assert.rejects(new BatchController().run({ ...f.job, pipelineVersion: "old" }, { ...f.dependencies, recognize: async () => result() }), /different OCR version/);
+  await assert.rejects(new BatchController().run({ ...f.job, pipelineVersion: "old" }, { ...f.dependencies, recognize: async () => result() }), /identity mismatch/);
 });
 
 test("a resolved model revision remains fixed across pause and resume and rejects a different result", async () => {
   const f = fixture(2), controller = new BatchController();
   const revision = "a".repeat(40);
   f.job = { ...f.job, modelRevision: revision, options: normalizeNdlOcrOptions({ modelRevision: revision }) };
+  f.job.identity = ndlExecutionIdentity(revision);
+  f.job.request = { schemaVersion: 1, engineId: 'ndl-parseq', options: f.job.options, expectedIdentity: f.job.identity };
   const paused = await controller.run(f.job, { ...f.dependencies, recognize: async (_page, settings) => {
-    assert.equal(settings.modelRevision, revision); controller.pause();
-    return { ...result(), revision, options: settings };
+    assert.equal(settings.options.modelRevision, revision); controller.pause();
+    return { ...result(), revision, identity: settings.expectedIdentity, options: settings.options };
   } });
-  await assert.rejects(new BatchController().run(paused, { ...f.dependencies, recognize: async () => result() }), /does not match/);
+  await assert.rejects(new BatchController().run(paused, { ...f.dependencies, recognize: async () => result() }), /identity mismatch/);
   assert.equal(f.saved().completed, 1);
   assert.equal(f.rows[1].status, "pending");
   const done = await new BatchController().run(f.saved(), { ...f.dependencies, recognize: async (_page, settings) => {
-    assert.equal(settings.modelRevision, revision);
-    return { ...result(), revision, options: settings };
+    assert.equal(settings.options.modelRevision, revision);
+    return { ...result(), revision, identity: settings.expectedIdentity, options: settings.options };
   } });
   assert.equal(done.status, "completed");
   assert.ok(f.rows.every(row => row.result?.revision === revision));
@@ -197,8 +202,8 @@ test("generated ZIP extracts UTF-8 text, empty pages, errors, and all canvas rec
   assert.ok(!texts.has("texts/00004.txt"));
   assert.match(texts.get("index.csv")!, /canvas\/3.*pending/);
   const csvRows = texts.get("index.csv")!.trimEnd().split("\n");
-  assert.equal(csvRows[0], "number,label,canvasId,status,file,inThisArchive,ocrConfidencePercent");
-  assert.deepEqual(csvRows.slice(1).map(row => row.split(",").at(-1)), ['"93"', '""', '""', '""']);
+  assert.equal(csvRows[0], "number,label,canvasId,status,file,inThisArchive,ocrConfidencePercent,ocrEngineId,ocrEngineLabel,detectorRevision,recognizerRevision,modelManifestDigest,provider,confidenceKind");
+  assert.deepEqual(csvRows.slice(1).map(row => row.split(",")[6]), ['"93"', '""', '""', '""']);
   assert.deepEqual([...texts.keys()].sort(), ["errors/00003.txt", "index.csv", "texts/00001.txt", "texts/00002.txt"]);
   const exactFit = await planZipParts(f.job, f.store, { bytes: 1024, entries: 4 });
   assert.deepEqual(exactFit.map((part) => part.indices), [[0, 1, 2]]);
@@ -217,14 +222,14 @@ test("generated ZIP extracts UTF-8 text, empty pages, errors, and all canvas rec
     assert.ok(!indexEntry.directory);
     const splitRows = (await indexEntry.getData(new TextWriter())).trimEnd().split("\n");
     assert.equal(splitRows[0], csvRows[0]);
-    assert.deepEqual(splitRows.slice(1).map(row => row.split(",").at(-1)), ['"93"', '""', '""', '""']);
+    assert.deepEqual(splitRows.slice(1).map(row => row.split(",")[6]), ['"93"', '""', '""', '""']);
     await archive.close();
   }
 });
 
 test("ZIP confidence requires complete valid recognition scores and never substitutes detection", async () => {
   const line = (recognitionScore?: number) => ({ text: "文字", detectionScore: 0.99, recognitionScore });
-  const cases: { status: OcrJobPage["status"]; lines: NdlOcrResult["lines"]; expected: string }[] = [
+  const cases: { status: OcrJobPage["status"]; lines: PageOcrResult["lines"]; expected: string }[] = [
     { status: "done", lines: [line(0.99), line(0.74)], expected: '"87"' },
     { status: "done", lines: [line(0)], expected: '"0"' },
     { status: "done", lines: [line(1)], expected: '"100"' },
@@ -232,6 +237,7 @@ test("ZIP confidence requires complete valid recognition scores and never substi
     { status: "done", lines: [line(0.9), line()], expected: '""' },
     ...[NaN, Infinity, -0.1, 1.1].map(score => ({ status: "done" as const, lines: [line(score)], expected: '""' })),
     { status: "done", lines: [{ ...line(0.9), confidenceKind: "unavailable" }], expected: '""' },
+    { status: "done", lines: [{ ...line(0.99), confidenceKind: "autoregressive-token" }], expected: '""' },
     { status: "done", lines: [], expected: '""' },
     ...(["failed", "unsupported", "pending", "no-text-detected"] as const).map(status => ({ status, lines: [line(0.9)], expected: '""' })),
   ];
@@ -246,7 +252,7 @@ test("ZIP confidence requires complete valid recognition scores and never substi
   assert.ok(!indexEntry.directory);
   const rows = (await indexEntry.getData(new TextWriter())).trimEnd().split("\n").slice(1);
   await reader.close();
-  assert.deepEqual(rows.map(row => row.split(",").at(-1)), cases.map(item => item.expected));
+  assert.deepEqual(rows.map(row => row.split(",")[6]), cases.map(item => item.expected));
 });
 
 test("network retry is bounded and abort is never converted to an image error", async () => {
@@ -260,4 +266,42 @@ test("network retry is bounded and abort is never converted to an image error", 
     globalThis.fetch = async () => { calls++; return new Response("busy", { status: 503 }); };
     await assert.rejects(fetchOcrResource("https://example.test/a"), /503/); assert.equal(calls, 4);
   } finally { globalThis.fetch = originalFetch; }
+});
+
+test('legacy migration accepts only pinned NDL jobs and does not mutate the saved row', () => {
+  const current = fixture(1).job;
+  const { schemaVersion, request, identity, ...legacy } = current;
+  const copy = structuredClone(legacy);
+  assert.equal(migrateOcrJob(legacy).request.engineId, 'ndl-parseq');
+  assert.deepEqual(legacy, copy);
+  assert.throws(() => migrateOcrJob({ ...legacy, modelRevision: 'master' }));
+  assert.throws(() => migrateOcrJob({ ...legacy, options: { ...legacy.options, modelRevision: undefined } }));
+  assert.throws(() => migrateOcrJob({ ...current, identity: { ...identity, engineId: 'honkoku-v19' } }));
+});
+
+test('Honkoku resumes the saved engine and refuses a replaced manifest before using cache', async () => {
+  const { DEFAULT_HONKOKU_MANIFEST: manifest } = await import('./honkoku/default-manifest.ts');
+  const { honkokuManifestDigest } = await import('./honkoku/manifest.ts');
+  const f = fixture(2);
+  const identity = { ...f.job.identity, engineId: 'honkoku-v19' as const, engineLabel: 'みんなで翻刻OCR v19',
+    recognizerRevision: manifest.upstreamCommit, upstreamRepository: manifest.upstreamRepository,
+    upstreamCommit: manifest.upstreamCommit, modelManifestDigest: await honkokuManifestDigest(manifest) };
+  f.job = { ...f.job, identity, modelRevision: identity.recognizerRevision,
+    request: { ...f.job.request, engineId: 'honkoku-v19', modelManifestUrl: 'https://models.example.test/manifest.json', expectedIdentity: identity } };
+  const fetcher = globalThis.fetch;
+  let replaced = false, calls = 0;
+  globalThis.fetch = async () => new Response(JSON.stringify(replaced ? { ...manifest, files: { ...manifest.files,
+    vocab: { ...manifest.files.vocab, sha256: 'f'.repeat(64) } } } : manifest));
+  try {
+    const first = new BatchController();
+    const paused = await first.run(f.job, { ...f.dependencies, recognize: async (_page, request) => {
+      calls++; assert.equal(request.engineId, 'honkoku-v19'); first.pause();
+      return { ...result(), identity, revision: identity.recognizerRevision };
+    } });
+    assert.equal(paused.completed, 1);
+    replaced = true;
+    await assert.rejects(new BatchController().run(paused, { ...f.dependencies, recognize: async () => { calls++; return result(); } }), /manifest changed/);
+    assert.equal(calls, 1);
+    assert.equal(f.saved().completed, 1);
+  } finally { globalThis.fetch = fetcher; }
 });

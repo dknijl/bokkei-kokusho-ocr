@@ -1,4 +1,4 @@
-import type { NdlOcrResult } from "./ndl-ocr";
+import type { PageOcrResult } from './ocr/engine/types.ts';
 import type { ViewerManifest, ViewerPage } from "./iiif";
 
 export function findPageIndexByCanvasId(
@@ -40,7 +40,7 @@ export function applyOcrResult(options: {
   manifest: ViewerManifest;
   targetManifestUrl: string;
   targetCanvasId: string;
-  result: NdlOcrResult;
+  result: PageOcrResult;
 }): { applied: boolean; pageIndex: number } {
   const { manifest, targetManifestUrl, targetCanvasId, result } = options;
   if (manifest.url !== targetManifestUrl) return { applied: false, pageIndex: -1 };
@@ -67,7 +67,14 @@ export function applyOcrResult(options: {
         }
       : undefined,
   }));
-  targetPage.ocrEngine = `NDL古典籍OCR-Lite · ${result.revision.slice(0, 8)}`;
+  targetPage.ocrIdentity = { ...result.identity };
+  targetPage.ocrEngineId = result.identity.engineId;
+  targetPage.ocrEngineLabel = result.identity.engineLabel;
+  targetPage.ocrDetectorRevision = result.identity.detectorRevision;
+  targetPage.ocrRecognizerRevision = result.identity.recognizerRevision;
+  targetPage.ocrModelManifestDigest = result.identity.modelManifestDigest;
+  targetPage.ocrUpstreamCommit = result.identity.upstreamCommit;
+  targetPage.ocrEngine = `${result.identity.engineLabel} · ${result.identity.recognizerRevision.slice(0, 8)}`;
   targetPage.ocrProvider = result.provider;
   targetPage.ocrModelRevision = result.revision;
   targetPage.ocrPipelineVersion = result.pipelineVersion;

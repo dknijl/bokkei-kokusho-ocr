@@ -6,17 +6,21 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "verify:lisp:vendor": "node scripts/vendor-honkoku.mjs",
     "dev": "vite",
     "build": "node build/run-vite-build.mjs",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json --tsgo",
     "test:unit": "node --experimental-strip-types --test src/lib/ocr/*.test.ts",
     "test:browser": "playwright test",
-    "test": "npm run check && npm run test:unit && npm run build",
-    "test:all": "npm test && npm run test:browser",
+    "test:honkoku-smoke": "playwright test --config playwright.model-smoke.config.ts",
+    "test": "npm run check && npm run test:unit && npm run build && npm run test:browser && npm run test:honkoku-adapter",
+    "test:all": "npm test",
     "update:itaiji": "node scripts/update-itaiji.mjs",
     "prepare:ocr-evaluation": "node scripts/prepare-ocr-evaluation.mjs",
-    "test:ocr-evaluation": "playwright test --config playwright.ocr-evaluation.config.ts"
+    "test:ocr-evaluation": "playwright test --config playwright.ocr-evaluation.config.ts",
+    "test:honkoku-adapter": "playwright test --config playwright.honkoku-adapter.config.ts",
+    "test:honkoku-line-smoke": "node scripts/test-honkoku-smoke.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

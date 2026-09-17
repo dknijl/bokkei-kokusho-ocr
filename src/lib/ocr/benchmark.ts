@@ -15,6 +15,7 @@ export type OcrBenchmarkRecord = {
   pipelineVersion: string;
   createdAt: string;
   modelRevision: string;
+  identity?: import('./engine/types.ts').OcrExecutionIdentity;
   page: {
     manifestUrl: string;
     canvasId: string;
@@ -101,6 +102,16 @@ export function ocrLinesFingerprint(lines: OcrLine[]): string {
   return JSON.stringify(lines.map((line) => ({
     id: line.id ?? "",
     text: line.text,
+    rawKoji: line.rawKoji ?? null,
+    outputFormat: line.outputFormat ?? null,
+    recognizerId: line.recognizerId ?? null,
+    recognizerRevision: line.recognizerRevision ?? null,
+    confidenceKind: line.confidenceKind ?? null,
+    confidenceCalibrated: line.confidenceCalibrated ?? null,
+    generatedTokens: line.generatedTokens ?? null,
+    stopReason: line.stopReason ?? null,
+    meanLogProbability: line.meanLogProbability ?? null,
+    minimumTokenProbability: line.minimumTokenProbability ?? null,
     region: line.region,
     detectionIndex: line.detectionIndex ?? null,
     readingOrder: line.readingOrder ?? null,
@@ -138,6 +149,7 @@ export function ocrBenchmarkDeterministicFingerprint(record: OcrBenchmarkRecord)
     schemaVersion: record.schemaVersion,
     pipelineVersion: record.pipelineVersion,
     modelRevision: record.modelRevision,
+    identity: record.identity,
     page: record.page,
     execution: {
       provider: record.execution.provider,
@@ -208,7 +220,8 @@ export function createOcrBenchmarkRecord(options: {
     schemaVersion: OCR_BENCHMARK_SCHEMA_VERSION,
     pipelineVersion: options.page.ocrPipelineVersion ?? OCR_PIPELINE_VERSION,
     createdAt: new Date().toISOString(),
-    modelRevision: options.modelRevision ?? options.page.ocrModelRevision ?? "unknown",
+    modelRevision: options.page.ocrIdentity?.recognizerRevision ?? options.modelRevision ?? options.page.ocrModelRevision ?? "unknown",
+    ...(options.page.ocrIdentity ? { identity: { ...options.page.ocrIdentity } } : {}),
     page: {
       manifestUrl: options.manifestUrl,
       canvasId: options.page.canvasId,
@@ -249,6 +262,8 @@ export function serializeBenchmarkCsv(record: OcrBenchmarkRecord): string {
       "pipelineVersion",
       "createdAt",
       "modelRevision",
+      'ocrEngineId', 'ocrEngineLabel', 'detectorRevision', 'recognizerRevision', 'modelManifestDigest',
+      'confidenceKind', 'outputFormat', 'rawKoji',
       "browser",
       "provider",
       "modelInferenceCount",
@@ -288,6 +303,9 @@ export function serializeBenchmarkCsv(record: OcrBenchmarkRecord): string {
       record.pipelineVersion,
       record.createdAt,
       record.modelRevision,
+      record.identity?.engineId ?? '', record.identity?.engineLabel ?? '',
+      record.identity?.detectorRevision ?? '', record.identity?.recognizerRevision ?? '',
+      record.identity?.modelManifestDigest ?? '', line.confidenceKind ?? '', line.outputFormat ?? '', line.rawKoji ?? '',
       record.execution.browser,
       record.execution.provider,
       record.execution.stats?.modelInferenceCount ?? "",

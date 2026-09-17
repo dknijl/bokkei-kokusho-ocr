@@ -2,39 +2,40 @@
   import { onDestroy, untrack } from "svelte";
   import type { ViewerManifest, ViewerPage } from "./lib/iiif";
   import type { NdlOcrOptions } from "./lib/ocr/profiles";
-  import type { NdlOcrResult, NdlOcrProgress } from "./lib/ndl-ocr";
-  import { BatchController, createOcrJob, latestOcrJob, indexedDbJobStore, type OcrJob } from "./lib/ocr/batch";
+  import type { PageOcrResult, PageOcrProgress } from "./lib/ocr/engine/types";
+  import type { OcrEngineId } from "./lib/ocr/types";
+  import { pinPageOcrRequest } from "./lib/ocr/engine/pin-request";
+  import { BatchController, isResumableOcrJob, createOcrJob, latestOcrJob, indexedDbJobStore, type OcrJob } from "./lib/ocr/batch";
   import { executeOcrPage, supportsOcrWorker } from "./lib/ocr/worker-client";
   import { chooseZipDestination, writeJobZip, planZipParts, downloadZipPart, type ZipPart } from "./lib/ocr/zip-export";
   import { OCR_PIPELINE_VERSION } from "./lib/ocr/benchmark";
   import { NDL_MODEL_REVISION, isNdlModelRevision } from "./lib/ocr/model-revision";
-  import { resolveLatestNdlModelRevision } from "./lib/ocr/model-source";
   import { batchProgress, type BatchPhase } from "./lib/ocr/batch-progress";
   import { t, type Locale } from "./lib/i18n";
 
-  let { manifest, options, currentCanvasId, singleRunning, locale, onBusy, onPageResult }: {
+  let { manifest, engineId, options, currentCanvasId, singleRunning, locale, onBusy, onPageResult }: {
     manifest: ViewerManifest;
+    engineId: OcrEngineId;
     options: NdlOcrOptions;
     currentCanvasId: string;
     singleRunning: boolean;
     locale: Locale;
     onBusy: (value: boolean) => void;
-    onPageResult: (manifestUrl: string, page: ViewerPage, result: NdlOcrResult) => void;
+    onPageResult: (manifestUrl: string, page: ViewerPage, result: PageOcrResult) => void;
   } = $props();
   let job = $state<OcrJob | null>(null);
   let running = $state(false);
   let pausing = $state(false);
   let exporting = $state(false);
   let error = $state("");
-  let progress = $state<NdlOcrProgress | null>(null);
+  let progress = $state<PageOcrProgress | null>(null);
   let parts = $state<ZipPart[]>([]);
   let controller: BatchController | null = null;
   let restoreGeneration = 0;
   const workerAvailable = supportsOcrWorker();
   const label = (ja: string, en: string) => locale === "ja" ? ja : en;
   const transcriptionRestricted = $derived(!manifest.licenseAllowsTranscription);
-  const resumable = $derived(job && isNdlModelRevision(job.modelRevision)
-    && job.modelRevision === (job.options.modelRevision ?? NDL_MODEL_REVISION) && job.pipelineVersion === OCR_PIPELINE_VERSION);
+  const resumable = $derived(job && isResumableOcrJob($state.snapshot(job)));
   const status = $derived(job ? batchProgress(job, running, pausing) : null);
   const finished = $derived(status?.phase === "completed" || status?.phase === "completed-with-errors");
   const phaseLabels: Record<BatchPhase, [string, string]> = {
@@ -78,8 +79,8 @@
     controller = new BatchController();
     const operation = async () => {
       if (newJob || !job) {
-        settings.modelRevision = await resolveLatestNdlModelRevision(controller!.signal);
-        job = await createOcrJob(snapshot, settings);
+        const pinned = await pinPageOcrRequest({ engineId, options: settings }, controller!.signal);
+        job = await createOcrJob(snapshot, pinned);
       }
       const initial = $state.snapshot(job!);
       await controller!.run(initial, {
@@ -135,6 +136,7 @@
 </script>
 
 <section class="batch-ocr" aria-label={label("全コマOCR", "Manifest OCR")}>
+  {#if job}<p>{label("保存ジョブのモデル", "Saved job model")}: {job.identity?.engineLabel ?? 'NDL古典籍OCR-Lite'}</p>{/if}
   <div class="batch-actions">
     <button type="button" class="batch-start" disabled={transcriptionRestricted || running || singleRunning || exporting || !workerAvailable} onclick={() => void run(true)}>{label("全コマをOCR", "OCR all canvases")}</button>
     {#if running}

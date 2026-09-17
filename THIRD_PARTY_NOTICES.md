@@ -1,28 +1,30 @@
-# Third-Party Notices
+# Third-party notices
 
-This project is distributed under the Apache License 2.0. The following external software, models, data, and services retain their own licenses and terms.
+## Honkoku OCR v19 model weights
 
-## Honkoku OCR v18
+Yuta Hashimoto, https://huggingface.co/yuta1984/honkoku-ocr
 
-- Upstream project: [`yuta1984/honkoku-ocr-web`](https://github.com/yuta1984/honkoku-ocr-web)
-- Pinned upstream commit: [`f0b0388a2744daaec4c92979e86516e4f8b3f8fd`](https://github.com/yuta1984/honkoku-ocr-web/tree/f0b0388a2744daaec4c92979e86516e4f8b3f8fd)
-- License declared by the model manifest: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
-- Runtime files: Honkoku encoder, decoder prefill, decoder step, and vocabulary files are fetched from the HTTPS manifest configured by `VITE_HONKOKU_MODEL_MANIFEST_URL`. They are not bundled in this repository.
-- Attribution: Honkoku OCR v18 is an optional, feature-gated browser OCR engine integrated from the pinned upstream project. The manifest must provide SHA-256 and byte-length metadata for every model file.
+Model snapshot: b0bc83884980826b884a2cfde5ca4275b7d911db.
+The model card declares Creative Commons Attribution-ShareAlike 4.0 International:
+https://creativecommons.org/licenses/by-sa/4.0/
+Weights are fetched from the publisher; they are not included in this repository.
+The training corpus derives from Minna de Honkoku transcriptions and IIIF images
+from holding institutions. This application is not the official Honkoku service.
 
-## NDL Koten OCR-Lite
+## Honkoku browser inference reference and vocabulary
 
-- Upstream project: [`ndl-lab/ndlkotenocr-lite`](https://github.com/ndl-lab/ndlkotenocr-lite)
-- Pinned model/source revision: `ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8`
-- License: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)
-- The browser implementation is independent and is not an official service provided or operated by the National Diet Library.
+Copyright (c) 2025 Yuta Hashimoto.
+https://github.com/yuta1984/honkoku-ocr-web/tree/24469701412edda5be26c89784a29c7525bbb899
+CC BY 4.0: https://creativecommons.org/licenses/by/4.0/
+Adapted preprocessing and encoder/prefill/KV-cache decoding for this application's
+Worker, integrity-checked asset cache, cancellation, tensor cleanup and metadata.
+No endorsement by the author is implied.
 
-## Kokusho Database Variant Character Data
+## NDL Kotenseki OCR-Lite
 
-- Upstream project: [`kokubunken/kokusho-itaiji-search`](https://github.com/kokubunken/kokusho-itaiji-search)
-- Pinned revision: `0fe0da905053588627146e7f037457a64285a93c`
-- License: MIT
-- Local license text: [`public/licenses/kokusho-itaiji-search.txt`](./public/licenses/kokusho-itaiji-search.txt)
+National Diet Library, https://github.com/ndl-lab/ndlkotenocr-lite
+CC BY 4.0. Used for RTMDet line detection and the selectable PARSeq recognition path.
+Other software and data notices remain in README.md.
 
 ## ONNX Runtime Web
 

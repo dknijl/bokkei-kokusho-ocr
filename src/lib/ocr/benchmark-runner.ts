@@ -1,5 +1,6 @@
 import type { ViewerPage } from "../iiif.ts";
-import type { NdlOcrProgress, NdlOcrResult } from "../ndl-ocr.ts";
+import type { NdlOcrResult } from '../ndl-ocr.ts';
+import type { PageOcrProgress, PageOcrResult } from './engine/types.ts';
 import {
   compareOcrBenchmarkRecords,
   createOcrBenchmarkBaseline,
@@ -14,7 +15,7 @@ import type { NdlOcrOptions } from "./profiles.ts";
 export type OcrBenchmarkProgress = {
   pageIndex: number;
   totalPages: number;
-  progress: NdlOcrProgress;
+  progress: PageOcrProgress;
 };
 
 export type OcrBenchmarkRunnerOptions = {
@@ -23,9 +24,9 @@ export type OcrBenchmarkRunnerOptions = {
   recognize: (
     page: ViewerPage,
     options: NdlOcrOptions,
-    onProgress: (progress: NdlOcrProgress) => void,
+    onProgress: (progress: PageOcrProgress) => void,
     signal?: AbortSignal,
-  ) => Promise<NdlOcrResult>;
+  ) => Promise<NdlOcrResult | PageOcrResult>;
   signal?: AbortSignal;
   onProgress?: (progress: OcrBenchmarkProgress) => void;
   onRecord?: (record: OcrBenchmarkRecord, pageIndex: number) => void;
@@ -81,6 +82,7 @@ export async function runOcrBenchmarkDataset(
       width: result.imageWidth,
       height: result.imageHeight,
       result: result.lines,
+      ...('identity' in result ? { ocrIdentity: { ...result.identity } } : {}),
       ocrProvider: result.provider,
       ocrModelRevision: result.revision,
       ocrPipelineVersion: result.pipelineVersion,

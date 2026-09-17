@@ -46,7 +46,7 @@ async function setup(page: Page, failThird = false, settings: { delay?: number; 
         const calls = JSON.parse(sessionStorage.getItem("mock-calls") ?? "[]");
         calls.push(data.page.canvasId); sessionStorage.setItem("mock-calls", JSON.stringify(calls));
         const revisions = JSON.parse(sessionStorage.getItem("mock-revisions") ?? "[]");
-        revisions.push(data.options.modelRevision); sessionStorage.setItem("mock-revisions", JSON.stringify(revisions));
+        revisions.push(data.request.options.modelRevision); sessionStorage.setItem("mock-revisions", JSON.stringify(revisions));
         setTimeout(() => {
           if (!this.stopped) this.onmessage?.(new MessageEvent("message", { data: { id: data.id, type: "progress", progress: {
             stage: "recognize", percent: 60, messageKey: "progressRecognize", completed: 1, total: 2, params: { current: 1, total: 2 },
@@ -60,10 +60,10 @@ async function setup(page: Page, failThird = false, settings: { delay?: number; 
           }
           const empty = data.page.canvasId.endsWith("/5");
           this.onmessage?.(new MessageEvent("message", { data: { id: data.id, type: "result", result: {
-            imageWidth: 2000, imageHeight: 4000, lines: empty ? [] : [{ text: "𠮷野の山", detectionScore: 0.9, readingOrder: 0,
+            identity: data.request.expectedIdentity, imageWidth: 2000, imageHeight: 4000, lines: empty ? [] : [{ text: "𠮷野の山", detectionScore: 0.9, readingOrder: 0,
               recognitionScore: 0.9, region: { x: 100, y: 200, width: 100, height: 1000 } }],
-            provider: "WASM", revision: data.options.modelRevision ?? "ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8", pipelineVersion,
-            profile: data.options.profile, options: data.options,
+            provider: "WASM", revision: data.request.options.modelRevision ?? "ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8", pipelineVersion,
+            profile: data.request.options.profile, options: data.request.options,
             stats: { detectionCount: empty ? 0 : 1, modelInferenceCount: 2, initialRecognitions: empty ? 0 : 1,
               extraRecognitions: 0, extraRecognitionAttempts: 0, adaptiveTiles: 0, highResolutionRetries: 0,
               additionalCropRequests: 0, additionalCropFailures: 0, maxCanvasPixels: 2000000, durationMs: 5 },
@@ -105,8 +105,8 @@ test("batch retains canvas order, failed/empty pages and downloads a real ZIP", 
   ]);
   expect(texts.get("index.csv")).not.toContain("pending");
   const csvRows = texts.get("index.csv")!.trimEnd().split("\n");
-  expect(csvRows[0]).toBe("number,label,canvasId,status,file,inThisArchive,ocrConfidencePercent");
-  expect(csvRows.slice(1).map(row => row.split(",").at(-1))).toEqual(['"90"', '""', '""', '"90"', '""']);
+  expect(csvRows[0]).toBe("number,label,canvasId,status,file,inThisArchive,ocrConfidencePercent,ocrEngineId,ocrEngineLabel,detectorRevision,recognizerRevision,modelManifestDigest,provider,confidenceKind");
+  expect(csvRows.slice(1).map(row => row.split(",")[6])).toEqual(['"90"', '""', '""', '"90"', '""']);
 });
 
 test("pause saves the active page, reload resumes without redoing completed canvases", async ({ page }) => {
@@ -178,7 +178,8 @@ test("IndexedDB commits page result and job checkpoint atomically", async ({ pag
     const { initialManifest } = await import(iiifPath);
     const profilePath = "/ocr/src/lib/ocr/profiles.ts";
     const { DEFAULT_NDL_OCR_OPTIONS } = await import(profilePath);
-    const job = await createOcrJob(initialManifest, DEFAULT_NDL_OCR_OPTIONS);
+    const { pinPageOcrRequest } = await import("/ocr/src/lib/ocr/engine/pin-request.ts");
+    const job = await createOcrJob(initialManifest, await pinPageOcrRequest({ engineId: "ndl-parseq", options: DEFAULT_NDL_OCR_OPTIONS }));
     const row = await indexedDbJobStore.getPage(job.id, 0);
     // The DataCloneError aborts the transaction after the page put was queued.
     await indexedDbJobStore.commitPage({ ...job, completed: 1, invalid: () => undefined }, { ...row, status: "done" }).catch(() => undefined);
@@ -268,7 +269,8 @@ test("old pipeline results remain exportable without restoring or reusing stale 
     const { parseManifest } = await import("/ocr/src/lib/iiif.ts");
     const { DEFAULT_NDL_OCR_OPTIONS } = await import("/ocr/src/lib/ocr/profiles.ts");
     const { buildOcrCacheKeyForPage, cacheEntryFromResult } = await import("/ocr/src/lib/ocr/cache.ts");
-    const job = await createOcrJob(parseManifest(manifest, manifest.id), DEFAULT_NDL_OCR_OPTIONS);
+    const { pinPageOcrRequest } = await import("/ocr/src/lib/ocr/engine/pin-request.ts");
+    const job = await createOcrJob(parseManifest(manifest, manifest.id), await pinPageOcrRequest({ engineId: "ndl-parseq", options: DEFAULT_NDL_OCR_OPTIONS }));
     const row = await indexedDbJobStore.getPage(job.id, 0);
     const result = { lines: [{ text: "古い結合結果", region: { x: 100, y: 100, width: 100, height: 2000 }, detectionScore: .8 }],
       revision: job.modelRevision, pipelineVersion: "frontend-ocr-source-worker-v1", imageWidth: 2000, imageHeight: 4000,
@@ -309,12 +311,14 @@ test("1000 simulated canvases release actual image buffers after each durable sa
     const { createOcrCanvas, releaseOcrCanvas, canvasCounters, resetCanvasCounters } = await import("/ocr/src/lib/ocr/canvas.ts");
     const { preprocessCanvas } = await import("/ocr/src/lib/ocr/preprocessing.ts");
     const manifest = { ...initialManifest, pages: Array.from({ length: 1000 }, (_, i) => ({ ...initialManifest.pages[0], canvasId: `stress-${i}`, canvasIndex: i })) };
-    const job = await createOcrJob(manifest, DEFAULT_NDL_OCR_OPTIONS);
+    const { pinPageOcrRequest } = await import("/ocr/src/lib/ocr/engine/pin-request.ts");
+    const job = await createOcrJob(manifest, await pinPageOcrRequest({ engineId: "ndl-parseq", options: DEFAULT_NDL_OCR_OPTIONS }));
     let maximumLive = 0, saved = 0;
     const final = await new BatchController().run(job, {
       prepare: async page => ({ page, key: page.canvasId }), readCache: async () => undefined, onChange: () => undefined,
       onPageSaved: () => { saved++; maximumLive = Math.max(maximumLive, canvasCounters().live); },
-      recognize: async (_page, options) => {
+      recognize: async (_page, request) => {
+        const options = request.options;
         resetCanvasCounters();
         const canvas = createOcrCanvas(); canvas.width = 64; canvas.height = 256;
         const context = canvas.getContext("2d")!; context.fillStyle = "#eee9dd"; context.fillRect(0, 0, 64, 256);
@@ -322,7 +326,7 @@ test("1000 simulated canvases release actual image buffers after each durable sa
         let candidate = null;
         try { candidate = preprocessCanvas(canvas, "sauvola"); }
         finally { releaseOcrCanvas(candidate); releaseOcrCanvas(canvas); }
-        return { lines: [], imageWidth: 64, imageHeight: 256, provider: "WASM", revision: job.modelRevision,
+        return { identity: request.expectedIdentity, lines: [], imageWidth: 64, imageHeight: 256, provider: "WASM", revision: job.modelRevision,
           pipelineVersion: job.pipelineVersion, profile: options.profile, options,
           stats: { detectionCount: 0, modelInferenceCount: 0, initialRecognitions: 0, extraRecognitions: 0, extraRecognitionAttempts: 0,
             adaptiveTiles: 0, highResolutionRetries: 0, additionalCropRequests: 0, additionalCropFailures: 0, maxCanvasPixels: 16384, durationMs: 0 } };
@@ -376,4 +380,27 @@ test("v2 uses the first sequence and both versions preserve missing and composit
       source: v2.pages[0].sourceWidth, canvas: v2.pages[0].width, composite: v3.pages[0].ocrAvailability };
   });
   expect(parsed).toEqual({ ids: ["c1", "c2", "c3"], indices: [0, 1, 2], availability: ["supported", "unsupported", "unsupported"], source: 2000, canvas: 1000, composite: "unsupported" });
+});
+
+test('legacy page cache upgrades only NDL entries and preserves Koji provenance isolation', async ({ page }) => {
+  await setup(page);
+  const result = await page.evaluate(async () => {
+    const { buildOcrCacheKeyForPage, readOcrCache, writeOcrCache } = await import('/ocr/src/lib/ocr/cache.ts');
+    const { ndlExecutionIdentity } = await import('/ocr/src/lib/ocr/engine/pin-request.ts');
+    const { normalizeNdlOcrOptions } = await import('/ocr/src/lib/ocr/profiles.ts');
+    const { OCR_PIPELINE_VERSION } = await import('/ocr/src/lib/ocr/benchmark.ts');
+    const { initialManifest } = await import('/ocr/src/lib/iiif.ts');
+    const revision = 'a'.repeat(40), identity = ndlExecutionIdentity(revision);
+    const options = normalizeNdlOcrOptions({ modelRevision: revision });
+    const p = initialManifest.pages[0], url = initialManifest.url;
+    const key = buildOcrCacheKeyForPage(p, url, revision, OCR_PIPELINE_VERSION, options);
+    await writeOcrCache({ key, manifestUrl: url, canvasId: p.canvasId, imageServiceId: p.imageServiceId,
+      savedAt: Date.now(), imageWidth: 100, imageHeight: 200, lines: [{ text: '旧NDL結果', detectionScore: 1 }],
+      provider: 'WASM', revision, pipelineVersion: OCR_PIPELINE_VERSION, profile: options.profile, options, stats: {} } as any);
+    const migrated = await readOcrCache(buildOcrCacheKeyForPage(p, url, revision, OCR_PIPELINE_VERSION, options, identity));
+    const wrong = await readOcrCache(buildOcrCacheKeyForPage(p, url, revision, OCR_PIPELINE_VERSION, options,
+      { ...identity, engineId: 'honkoku-v19', modelManifestDigest: 'b'.repeat(64) }));
+    return { migrated: migrated?.identity.engineId, text: migrated?.lines[0].text, wrong };
+  });
+  expect(result).toEqual({ migrated: 'ndl-parseq', text: '旧NDL結果', wrong: null });
 });

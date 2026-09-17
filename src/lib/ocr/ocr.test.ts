@@ -1,3 +1,4 @@
+import './engine/engine.test.ts';
 import { DEFAULT_NDL_OCR_OPTIONS } from "./profiles.ts";
 import assert from "node:assert/strict";
 import test from "node:test";

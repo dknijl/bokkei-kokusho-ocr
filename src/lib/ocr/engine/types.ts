@@ -1,20 +1,44 @@
-import type { ViewerPage } from "../../iiif.ts";
-import type { TranslationKey } from "../../i18n.ts";
-import type { NdlOcrOptions } from "../profiles.ts";
-import type {
-  OcrEngineId,
-  OcrGenerationDiagnostics,
-  OcrLine,
-  OcrRunStats,
-} from "../types.ts";
+import type { OcrLine, OcrRunStats, OcrEngineId, OcrGenerationDiagnostics } from '../types.ts';
+import type { NdlOcrOptions } from '../profiles.ts';
+import type { NdlOcrProgress } from '../../ndl-ocr.ts';
 
-export type {
-  OcrConfidenceKind,
-  OcrEngineId,
-  OcrLine,
-  OcrRegion,
-  OcrRunStats,
-} from "../types.ts";
+export type OcrExecutionIdentity = {
+  engineId: OcrEngineId;
+  engineLabel: string;
+  detectorRevision: string;
+  recognizerRevision: string;
+  pipelineVersion: string;
+  modelManifestDigest?: string;
+  upstreamRepository?: string;
+  upstreamCommit?: string;
+};
+
+export type PageOcrRequest = {
+  engineId: OcrEngineId;
+  options: NdlOcrOptions;
+  modelManifestUrl?: string;
+};
+
+export type PinnedPageOcrRequest = PageOcrRequest & {
+  schemaVersion: 1;
+  modelDownloadBytes?: number;
+  expectedIdentity: OcrExecutionIdentity;
+};
+
+export type PageOcrProgress = NdlOcrProgress;
+export type PageOcrResult = {
+  identity: OcrExecutionIdentity;
+  imageWidth: number;
+  imageHeight: number;
+  lines: OcrLine[];
+  provider: string;
+  /** Compatibility alias for the recognizer revision. */
+  revision: string;
+  pipelineVersion: string;
+  profile: NdlOcrOptions['profile'];
+  options: NdlOcrOptions;
+  stats: OcrRunStats;
+};
 
 export type StructuredOcrText = {
   format: "plain" | "koji";
@@ -58,52 +82,5 @@ export interface LineRecognizer {
   dispose(): Promise<void>;
 }
 
-export type PageOcrResult = {
-  imageWidth: number;
-  imageHeight: number;
-  lines: OcrLine[];
 
-  engineId: OcrEngineId;
-  engineLabel: string;
-  provider: string;
-  detectorRevision: string;
-  recognizerRevision: string;
-  modelManifestDigest?: string;
-  pipelineVersion: string;
-
-  profile: NdlOcrOptions["profile"];
-  options: NdlOcrOptions;
-  stats: OcrRunStats;
-
-  /** Compatibility name used by the original NDL page pipeline. */
-  revision: string;
-};
-
-export type PageOcrRequest = {
-  engineId?: OcrEngineId;
-  options?: NdlOcrOptions;
-  modelManifestUrl?: string;
-};
-
-export type PageProgressCallback = (progress: {
-  stage: "image" | "detector-model" | "recognizer-model" | "detect" | "recognize" | "retry" | "done";
-  percent: number;
-  messageKey: TranslationKey;
-  params?: Record<string, string | number>;
-  completed?: number;
-  total?: number;
-}) => void;
-
-export type EngineDescriptor = {
-  id: OcrEngineId;
-  label: string;
-  enabled: boolean;
-  reason?: string;
-};
-
-export type PageRecognizer = (
-  page: ViewerPage,
-  request: PageOcrRequest,
-  onProgress: PageProgressCallback,
-  signal?: AbortSignal,
-) => Promise<PageOcrResult>;
+export type PageProgressCallback = (progress: PageOcrProgress) => void;

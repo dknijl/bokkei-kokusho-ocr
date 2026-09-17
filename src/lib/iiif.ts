@@ -14,6 +14,13 @@ export type {
 } from "./ocr/types.ts";
 
 export type ViewerPage = {
+  ocrIdentity?: import('./ocr/engine/types.ts').OcrExecutionIdentity;
+  ocrEngineId?: import('./ocr/types.ts').OcrEngineId;
+  ocrEngineLabel?: string;
+  ocrDetectorRevision?: string;
+  ocrRecognizerRevision?: string;
+  ocrModelManifestDigest?: string;
+  ocrUpstreamCommit?: string;
   canvasIndex?: number;
   sourceImage?: string;
   sourceWidth?: number;

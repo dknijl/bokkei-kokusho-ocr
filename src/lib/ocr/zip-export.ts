@@ -48,7 +48,7 @@ function ocrConfidencePercent(row: OcrJobPage): number | undefined {
   for (const line of lines) {
     const score = line.recognitionScore;
     // A page average requires recognition scores for every line; detection is a separate score.
-    if (line.confidenceKind === "unavailable" || score === undefined || !Number.isFinite(score) || score < 0 || score > 1) return undefined;
+    if (line.confidenceKind === "autoregressive-token" || line.confidenceCalibrated === false || line.confidenceKind === "unavailable" || score === undefined || !Number.isFinite(score) || score < 0 || score > 1) return undefined;
     sum += score;
   }
   return Math.round(sum / lines.length * 100);
@@ -57,14 +57,15 @@ function ocrConfidencePercent(row: OcrJobPage): number | undefined {
 export async function writeJobZip(job: OcrJob, destination: WritableStream<Uint8Array> | BlobWriter, store: JobStore = indexedDbJobStore, part?: ZipPart): Promise<Blob | undefined> {
   const writer = new ZipWriter(destination, { level: 6, useWebWorkers: false });
   const include = part ? new Set(part.indices) : null;
-  const indexRows = ["number,label,canvasId,status,file,inThisArchive,ocrConfidencePercent"];
+  const indexRows = ["number,label,canvasId,status,file,inThisArchive,ocrConfidencePercent,ocrEngineId,ocrEngineLabel,detectorRevision,recognizerRevision,modelManifestDigest,provider,confidenceKind"];
   const digits = Math.max(5, String(job.total).length);
   try {
     for (let index = 0; index < job.total; index++) {
       const row = await store.getPage(job.id, index);
       const entry = pageExport(row, digits);
       const included = Boolean(entry && (!include || include.has(index)));
-      indexRows.push([(row.page.canvasIndex ?? index) + 1, row.page.label, row.page.canvasId, row.status, entry?.name ?? "", included, ocrConfidencePercent(row)].map(csv).join(","));
+      const identity = row.result?.identity ?? job.identity;
+      indexRows.push([(row.page.canvasIndex ?? index) + 1, row.page.label, row.page.canvasId, row.status, entry?.name ?? "", included, ocrConfidencePercent(row), identity?.engineId, identity?.engineLabel, identity?.detectorRevision, identity?.recognizerRevision, identity?.modelManifestDigest, row.result?.provider, [...new Set(row.result?.lines.map(line => line.confidenceKind ?? "parseq-token"))].join(";")].map(csv).join(","));
       if (entry && included) await writer.add(entry.name, new TextReader(entry.text));
     }
     await writer.add("index.csv", new TextReader(indexRows.join("\n") + "\n"));

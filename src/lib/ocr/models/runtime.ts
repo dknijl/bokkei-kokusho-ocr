@@ -15,6 +15,7 @@ export async function isWebGpuAvailable(): Promise<boolean> {
 export function isMobileRuntime(): boolean {
   if (typeof navigator === "undefined") return false;
   return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)
+    || navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1
     || navigator.maxTouchPoints > 1 && Math.min(screen.width, screen.height) < 1024;
 }
 

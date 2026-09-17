@@ -8,11 +8,11 @@ import type { OcrLine } from "./types.ts";
 test("Honkoku token diagnostics do not become calibrated NDL confidence", () => {
   const line: OcrLine = {
     text: "山", rawKoji: "<ruby>山<rt>やま</rt></ruby>", outputFormat: "koji",
-    recognizerId: "honkoku-v18", confidenceKind: "autoregressive-token", confidenceCalibrated: false,
+    recognizerId: "honkoku-v19", confidenceKind: "autoregressive-token", confidenceCalibrated: false,
     generatedTokens: 5, stopReason: "eos", meanLogProbability: -0.1, minimumTokenProbability: 0.9,
     detectionScore: 0.9,
   };
-  assert.equal(lineConfidenceState(line, "honkoku-v18"), "unknown");
+  assert.equal(lineConfidenceState(line, "honkoku-v19"), "unknown");
   // Existing plain-text output retains both the base text and its reading.
   assert.equal(rawKojiToPlainText(line.rawKoji!), "山やま");
   const ndl: OcrLine = { text: "山", detectionScore: 0.9, recognitionScore: 0.95 };

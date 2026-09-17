@@ -1,5 +1,8 @@
 import type { ViewerManifest, ViewerPage } from "../iiif.ts";
-import type { NdlOcrResult, NdlOcrProgress } from "../ndl-ocr.ts";
+import type { PageOcrResult, PageOcrProgress, PinnedPageOcrRequest, OcrExecutionIdentity } from "./engine/types.ts";
+import { ndlExecutionIdentity, validatePinnedPageOcrRequest, verifyPinnedHonkokuManifest } from "./engine/pin-request.ts";
+import { assertResultIdentity, ndlPageResult } from "./engine/result.ts";
+import { canonicalJson } from "./honkoku/manifest.ts";
 import { openOcrDatabase, buildOcrCacheKeyForPage, cacheEntryFromResult, readOcrCache, resultFromOcrCache, type OcrCacheEntry } from "./cache.ts";
 import { OCR_PIPELINE_VERSION } from "./benchmark.ts";
 import { ndlModelRevision } from "./model-revision.ts";
@@ -10,6 +13,9 @@ import { resolvePageImageSource } from "./image-source.ts";
 export type JobStatus = "ready" | "running" | "paused" | "cancelled" | "completed" | "completed-with-errors";
 export type JobPageStatus = "pending" | "done" | "no-text-detected" | "failed" | "unsupported";
 export type OcrJob = {
+  schemaVersion: 2;
+  request: PinnedPageOcrRequest;
+  identity: OcrExecutionIdentity;
   id: string;
   manifestUrl: string;
   title: string;
@@ -31,7 +37,7 @@ export type OcrJobPage = {
   index: number;
   page: ViewerPage;
   status: JobPageStatus;
-  result?: NdlOcrResult;
+  result?: PageOcrResult;
   error?: string;
 };
 
@@ -63,6 +69,9 @@ export const indexedDbJobStore: JobStore = {
       request.onsuccess = () => set(request.result);
     });
     if (!row) throw new OcrFailure(`Saved Canvas ${index + 1} is missing`, "storage");
+    if (row.result && !row.result.identity && row.result.pipelineVersion === OCR_PIPELINE_VERSION) {
+      row.result = ndlPageResult(row.result as import("../ndl-ocr.ts").NdlOcrResult);
+    }
     return row;
   },
   saveJob: (job) => transaction(["jobs"], "readwrite", (tx) => { tx.objectStore("jobs").put(job); }),
@@ -73,10 +82,14 @@ export const indexedDbJobStore: JobStore = {
   }),
 };
 
-export async function createOcrJob(manifest: ViewerManifest, options: NdlOcrOptions): Promise<OcrJob> {
+export async function createOcrJob(manifest: ViewerManifest, request: PinnedPageOcrRequest): Promise<OcrJob> {
+  request = structuredClone(request);
+  validatePinnedPageOcrRequest(request);
+  const options = request.options;
   const job: OcrJob = {
+    schemaVersion: 2, request, identity: request.expectedIdentity,
     id: crypto.randomUUID(), manifestUrl: manifest.url, title: manifest.title, recordId: manifest.recordId,
-    modelRevision: ndlModelRevision(options.modelRevision), pipelineVersion: OCR_PIPELINE_VERSION, options: normalizeNdlOcrOptions(options),
+    modelRevision: request.expectedIdentity.recognizerRevision, pipelineVersion: OCR_PIPELINE_VERSION, options: normalizeNdlOcrOptions(options),
     total: manifest.pages.length, completed: 0, failed: 0, nextIndex: 0, status: "ready", createdAt: Date.now(), updatedAt: Date.now(),
   };
   await transaction(["jobs", "job-pages"], "readwrite", (tx) => {
@@ -109,13 +122,14 @@ export async function latestOcrJob(manifestUrl: string): Promise<OcrJob | null> 
   });
 }
 
-export async function prepareOcrCache(page: ViewerPage, manifestUrl: string, options: NdlOcrOptions, signal?: AbortSignal): Promise<{ page: ViewerPage; key: string }> {
+export async function prepareOcrCache(page: ViewerPage, manifestUrl: string, request: PinnedPageOcrRequest, signal?: AbortSignal): Promise<{ page: ViewerPage; key: string }> {
+  const options = request.options;
   const source = await resolvePageImageSource(page, options, signal);
   const prepared = { ...page, sourceWidth: source.width, sourceHeight: source.height };
-  return { page: prepared, key: buildOcrCacheKeyForPage(prepared, manifestUrl, ndlModelRevision(options.modelRevision), OCR_PIPELINE_VERSION, options) };
+  return { page: prepared, key: buildOcrCacheKeyForPage(prepared, manifestUrl, ndlModelRevision(options.modelRevision), OCR_PIPELINE_VERSION, options, request.expectedIdentity) };
 }
 
-export type BatchRecognizer = (page: ViewerPage, options: NdlOcrOptions, progress: (value: NdlOcrProgress) => void, signal?: AbortSignal) => Promise<NdlOcrResult>;
+export type BatchRecognizer = (page: ViewerPage, request: PinnedPageOcrRequest, progress: (value: PageOcrProgress) => void, signal?: AbortSignal) => Promise<PageOcrResult>;
 
 export class BatchController {
   private controller = new AbortController();
@@ -127,18 +141,17 @@ export class BatchController {
   async run(initial: OcrJob, dependencies: {
     store?: JobStore;
     recognize: BatchRecognizer;
-    onChange: (job: OcrJob, progress?: NdlOcrProgress) => void;
+    onChange: (job: OcrJob, progress?: PageOcrProgress) => void;
     onPageSaved?: (page: OcrJobPage) => void;
     retryFailures?: boolean;
     prepare?: typeof prepareOcrCache;
     readCache?: typeof readOcrCache;
   }): Promise<OcrJob> {
     const store = dependencies.store ?? indexedDbJobStore;
-    if (initial.modelRevision !== ndlModelRevision(initial.options.modelRevision) || initial.pipelineVersion !== OCR_PIPELINE_VERSION) {
-      throw new OcrFailure("This saved job uses a different OCR version. Export it or start a new job.", "model");
-    }
+    initial = migrateOcrJob(initial);
+    if (initial.request.engineId === 'honkoku-v19') await verifyPinnedHonkokuManifest(initial.request, this.signal);
     let job: OcrJob = { ...initial, status: "running", error: undefined, updatedAt: Date.now() };
-    const notify = (progress?: NdlOcrProgress) => dependencies.onChange({ ...job }, progress);
+    const notify = (progress?: PageOcrProgress) => dependencies.onChange({ ...job }, progress);
     await store.saveJob(job);
     notify();
     try {
@@ -155,18 +168,16 @@ export class BatchController {
           next = { ...row, status: "unsupported", error: row.page.unsupportedReason };
         } else {
           try {
-            const prepared = await (dependencies.prepare ?? prepareOcrCache)(row.page, job.manifestUrl, job.options, this.controller.signal);
+            const prepared = await (dependencies.prepare ?? prepareOcrCache)(row.page, job.manifestUrl, job.request, this.controller.signal);
             const cached = await (dependencies.readCache ?? readOcrCache)(prepared.key);
             abortCheck(this.controller.signal);
             const result = cached ? resultFromOcrCache(cached)
-              : await dependencies.recognize(prepared.page, job.options, notify, this.controller.signal);
+              : await dependencies.recognize(prepared.page, job.request, notify, this.controller.signal);
             abortCheck(this.controller.signal);
-            if (result.revision !== job.modelRevision || result.pipelineVersion !== job.pipelineVersion) {
-              throw new OcrFailure("OCR result does not match the saved job's model and pipeline version", "model");
-            }
+            assertResultIdentity(result, job.request);
             prepared.page.sourceWidth = result.imageWidth;
             prepared.page.sourceHeight = result.imageHeight;
-            const key = buildOcrCacheKeyForPage(prepared.page, job.manifestUrl, job.modelRevision, job.pipelineVersion, job.options);
+            const key = buildOcrCacheKeyForPage(prepared.page, job.manifestUrl, job.modelRevision, job.pipelineVersion, job.options, job.identity);
             cache = cacheEntryFromResult(key, prepared.page, job.manifestUrl, result);
             next = { ...row, page: prepared.page, status: result.lines.length ? "done" : "no-text-detected", result, error: undefined };
           } catch (error) {
@@ -198,4 +209,29 @@ export class BatchController {
     notify();
     return job;
   }
+}
+
+/** Old jobs are admitted only with a complete, internally consistent NDL identity. */
+export function migrateOcrJob(value: unknown): OcrJob {
+  if (!value || typeof value !== 'object') throw new Error('Invalid saved OCR job.');
+  const job = structuredClone(value) as OcrJob;
+  if (job.schemaVersion === undefined) {
+    if (!job.options || job.options.modelRevision !== job.modelRevision || job.pipelineVersion !== OCR_PIPELINE_VERSION) {
+      throw new Error('This saved job is incompatible. Start a new OCR job.');
+    }
+    job.identity = ndlExecutionIdentity(job.modelRevision);
+    job.request = { schemaVersion: 1, engineId: 'ndl-parseq', options: normalizeNdlOcrOptions(job.options), expectedIdentity: job.identity };
+    job.schemaVersion = 2;
+  }
+  if (job.schemaVersion !== 2) throw new Error('Unsupported OCR job version.');
+  validatePinnedPageOcrRequest(job.request);
+  if (canonicalJson(job.identity) !== canonicalJson(job.request.expectedIdentity)
+    || canonicalJson(job.options) !== canonicalJson(job.request.options)
+    || job.pipelineVersion !== job.identity.pipelineVersion || job.modelRevision !== job.identity.recognizerRevision) {
+    throw new Error('Saved OCR job identity mismatch.');
+  }
+  return job;
+}
+export function isResumableOcrJob(value: unknown): boolean {
+  try { migrateOcrJob(value); return true; } catch { return false; }
 }

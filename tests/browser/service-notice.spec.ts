@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-const JA = "このOCRは国立国会図書館(NDL)が作成した古典籍OCR-LiteおよびCODHのMetomくずし字認識サービスを用いた簡易OCRサービスです。CC BY 4.0で提供されているサービスを元に作られているサービスであることをご了承ください。";
+const JA = "みんなで翻刻OCR v19（設定時）";
 const EN = "This is a simple OCR service that uses Koten OCR-Lite";
 
 test.describe("service notice consent", () => {

@@ -1,3 +1,7 @@
+export type OcrEngineId = 'ndl-parseq' | 'honkoku-v19';
+export type OcrConfidenceKind = 'parseq-token' | 'autoregressive-token' | 'unavailable';
+export type OcrStopReason = 'eos' | 'max-length' | 'degenerate-repeat' | 'invalid-token' | 'incomplete';
+
 export type OcrRegion = {
   x: number;
   y: number;
@@ -40,11 +44,9 @@ export type OcrAlternative = {
 
 export type OcrSelectionReason = "consensus" | "score" | "original-tie" | "evaluation-only";
 
-export type OcrEngineId = "ndl-parseq" | "honkoku-v18";
-export type OcrConfidenceKind = "parseq-token" | "autoregressive-token" | "unavailable";
 export type OcrGenerationDiagnostics = {
   generatedTokens?: number;
-  stopReason?: "eos" | "max-length" | "degenerate-repeat";
+  stopReason?: OcrStopReason;
   meanLogProbability?: number;
   minimumTokenProbability?: number;
 };
@@ -52,11 +54,15 @@ export type OcrGenerationDiagnostics = {
 export type OcrLine = OcrGenerationDiagnostics & {
   text: string;
   rawKoji?: string;
-  outputFormat?: "plain" | "koji";
+  outputFormat?: 'plain' | 'koji';
   recognizerId?: OcrEngineId;
   recognizerRevision?: string;
   confidenceKind?: OcrConfidenceKind;
   confidenceCalibrated?: boolean;
+  generatedTokens?: number;
+  stopReason?: OcrStopReason;
+  meanLogProbability?: number;
+  minimumTokenProbability?: number;
   region?: OcrRegion;
   id?: string;
   detectionIndex?: number;
