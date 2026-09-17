@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "outputDirectory": "dist/client",
+  "routes": [
+    {
+      "src": "/ocr(?:/[0-9]+)?/?",
+      "dest": "/index.html"
+    },
+    {
+      "src": "/ocr/(.*)",
+      "dest": "/$1"
+    },
+    {
+      "handle": "filesystem"
+    }
+  ]
+}
