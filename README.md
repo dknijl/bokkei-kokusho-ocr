@@ -2,6 +2,10 @@
 
 古典籍の画像をブラウザで閲覧し、OCRで文字を読み取るアプリです。
 
+NDL及びみんなで翻刻のAI OCRモデルを利用しております。
+
+<img width="560" alt="bokkei image" src="https://github.com/user-attachments/assets/8af73d65-e74f-46d7-9690-2dd7d01c01cb" />
+
 ## 使い方
 
 1. 「資料」から書誌IDまたはIIIF Manifestを指定します。
@@ -21,6 +25,14 @@ npm run dev
 
 `http://localhost:5173/ocr/` で開き、終了は `Ctrl+C`。
 検証は `npm test`、ビルドは `npm run build` です。
+
+## 国書データベース公開画像のAI OCR対応
+
+国書データベースで公開されているCC-BY等のライセンスのmanifestファイルは、該当書誌の`bid`を指定することで閲覧可能です。
+
+`http://localhost:5173/ocr/{bid}`
+
+例： http://localhost:5173/ocr/200021552  (**古今和歌集**)
 
 ## ライセンス
 
