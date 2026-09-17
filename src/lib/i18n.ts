@@ -51,7 +51,7 @@ const ja = {
   previous: "← 前",
   next: "次 →",
   recognitionResult: "RECOGNITION RESULT",
-  ocrHeading: "読取結果",
+  ocrHeading: "AI-OCR・読取結果",
   searchVariants: "異体字を検索",
   searchRecognition: "認識結果を検索",
   autoOcr: "ページ自動OCR",
