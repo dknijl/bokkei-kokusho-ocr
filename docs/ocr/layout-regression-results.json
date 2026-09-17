@@ -1,0 +1,237 @@
+{
+  "measuredAt": "2026-09-11T02:19:25.723Z",
+  "purpose": "Regression: preserve two detector notes independently of their wider lower body line. This is not an independent accuracy benchmark.",
+  "modelRevision": "ede4283845cdc0ba2bda8b7ebfc3dc80b33c92c8",
+  "runs": [
+    {
+      "requested": "wasm",
+      "name": "manuscript",
+      "provider": "WASM",
+      "pipelineVersion": "frontend-ocr-source-worker-v2",
+      "manifestUrl": "https://kokusho.nijl.ac.jp/biblio/200021552/manifest",
+      "canvasId": "https://kokusho.nijl.ac.jp/biblio/200021552/canvas/1",
+      "beforeLineCount": 12,
+      "afterLineCount": 14,
+      "stats": {
+        "detectionCount": 14,
+        "modelInferenceCount": 15,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 14,
+        "extraRecognitions": 0,
+        "extraRecognitionAttempts": 0,
+        "highResolutionRetries": 0,
+        "additionalCropRequests": 0,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 15511,
+        "imageRequests": 1,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      },
+      "notes": [
+        {
+          "text": "天皇御宇十年",
+          "region": {
+            "x": 2829.9651349833916,
+            "y": 1092.9702665948867,
+            "width": 80.96699238896637,
+            "height": 468.95162698745725
+          }
+        },
+        {
+          "text": "於岡本宮摂政",
+          "region": {
+            "x": 2722.7863260256286,
+            "y": 1097.8782449626922,
+            "width": 87.4654121713717,
+            "height": 464.55083782196044
+          }
+        }
+      ],
+      "body": [
+        {
+          "text": "ことしけくともたへんこおもふな",
+          "region": {
+            "x": 2713.6351005170727,
+            "y": 1724.6288541412353,
+            "width": 209.4353792458124,
+            "height": 2459.8055470275876
+          }
+        }
+      ]
+    },
+    {
+      "requested": "wasm",
+      "name": "illustrated",
+      "provider": "WASM",
+      "pipelineVersion": "frontend-ocr-source-worker-v2",
+      "manifestUrl": "https://kokusho.nijl.ac.jp/biblio/200011824/manifest",
+      "canvasId": "https://kokusho.nijl.ac.jp/biblio/200011824/canvas/4",
+      "beforeLineCount": 30,
+      "afterLineCount": 31,
+      "stats": {
+        "detectionCount": 31,
+        "modelInferenceCount": 34,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 31,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 1,
+        "additionalCropRequests": 1,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 18176,
+        "imageRequests": 2,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      }
+    },
+    {
+      "requested": "wasm",
+      "name": "scroll",
+      "provider": "WASM",
+      "pipelineVersion": "frontend-ocr-source-worker-v2",
+      "manifestUrl": "https://da.dl.itc.u-tokyo.ac.jp/portal/repo/iiif/fbd0479b-dbb4-4eaa-95b8-f27e1c423e4b/manifest",
+      "canvasId": "https://iiif.dl.itc.u-tokyo.ac.jp/repo/iiif/fbd0479b-dbb4-4eaa-95b8-f27e1c423e4b/canvas/p1",
+      "beforeLineCount": 80,
+      "afterLineCount": 83,
+      "stats": {
+        "detectionCount": 83,
+        "modelInferenceCount": 106,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 83,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 2,
+        "additionalCropRequests": 2,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4194304,
+        "durationMs": 89866,
+        "imageRequests": 42,
+        "sourceTiles": 21,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      }
+    },
+    {
+      "requested": "auto",
+      "name": "manuscript",
+      "provider": "WebGPU",
+      "pipelineVersion": "frontend-ocr-source-worker-v2",
+      "manifestUrl": "https://kokusho.nijl.ac.jp/biblio/200021552/manifest",
+      "canvasId": "https://kokusho.nijl.ac.jp/biblio/200021552/canvas/1",
+      "beforeLineCount": 12,
+      "afterLineCount": 14,
+      "stats": {
+        "detectionCount": 14,
+        "modelInferenceCount": 15,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 14,
+        "extraRecognitions": 0,
+        "extraRecognitionAttempts": 0,
+        "highResolutionRetries": 0,
+        "additionalCropRequests": 0,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 20672,
+        "imageRequests": 1,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      },
+      "notes": [
+        {
+          "text": "天皇御宇十年",
+          "region": {
+            "x": 2829.9651349833916,
+            "y": 1092.9702665948867,
+            "width": 80.96699238896637,
+            "height": 468.95162698745725
+          }
+        },
+        {
+          "text": "於岡本宮摂政",
+          "region": {
+            "x": 2722.7863260256286,
+            "y": 1097.8782449626922,
+            "width": 87.4654121713717,
+            "height": 464.55083782196044
+          }
+        }
+      ],
+      "body": [
+        {
+          "text": "ことしけくともたへんこおもふな",
+          "region": {
+            "x": 2713.634933105377,
+            "y": 1724.6283419895171,
+            "width": 209.43554665750787,
+            "height": 2459.8060692214963
+          }
+        }
+      ]
+    },
+    {
+      "requested": "auto",
+      "name": "illustrated",
+      "provider": "WebGPU",
+      "pipelineVersion": "frontend-ocr-source-worker-v2",
+      "manifestUrl": "https://kokusho.nijl.ac.jp/biblio/200011824/manifest",
+      "canvasId": "https://kokusho.nijl.ac.jp/biblio/200011824/canvas/4",
+      "beforeLineCount": 30,
+      "afterLineCount": 31,
+      "stats": {
+        "detectionCount": 31,
+        "modelInferenceCount": 34,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 31,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 1,
+        "additionalCropRequests": 1,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4000000,
+        "durationMs": 12165,
+        "imageRequests": 2,
+        "sourceTiles": 1,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      }
+    },
+    {
+      "requested": "auto",
+      "name": "scroll",
+      "provider": "WebGPU",
+      "pipelineVersion": "frontend-ocr-source-worker-v2",
+      "manifestUrl": "https://da.dl.itc.u-tokyo.ac.jp/portal/repo/iiif/fbd0479b-dbb4-4eaa-95b8-f27e1c423e4b/manifest",
+      "canvasId": "https://iiif.dl.itc.u-tokyo.ac.jp/repo/iiif/fbd0479b-dbb4-4eaa-95b8-f27e1c423e4b/canvas/p1",
+      "beforeLineCount": 80,
+      "afterLineCount": 83,
+      "stats": {
+        "detectionCount": 83,
+        "modelInferenceCount": 106,
+        "adaptiveTiles": 0,
+        "initialRecognitions": 83,
+        "extraRecognitions": 2,
+        "extraRecognitionAttempts": 2,
+        "highResolutionRetries": 2,
+        "additionalCropRequests": 2,
+        "additionalCropFailures": 0,
+        "maxCanvasPixels": 4194304,
+        "durationMs": 69123,
+        "imageRequests": 42,
+        "sourceTiles": 21,
+        "warnings": [],
+        "maxLiveCanvases": 5,
+        "liveCanvasesAfterPage": 0
+      }
+    }
+  ]
+}

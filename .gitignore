@@ -46,3 +46,7 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+.kiokuko.json
+
+!.env.example
+/.honkoku-reference/

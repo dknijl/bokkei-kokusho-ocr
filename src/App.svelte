@@ -15,14 +15,13 @@
     type CropRegion,
     type MetomPrediction,
   } from "./lib/ocr";
-  import {
-    recognizePageWithNdlLite,
-    type NdlOcrResult,
-    type NdlOcrProgress,
-  } from "./lib/ndl-ocr";
+  import { executeOcrPage, type PageOcrResult, type PageOcrProgress } from './lib/page-ocr';
+  import { OCR_ENGINES, canRunHonkoku, normalizeOcrEngine } from './lib/ocr/engine/registry';
+  import type { OcrEngineId } from './lib/ocr/types';
+  import { pinPageOcrRequest } from './lib/ocr/engine/pin-request';
+  import { confidencePresentation, recognitionAveragePercent, isAutoregressiveLine, generationScore, generationAverageScore } from './lib/ocr/confidence-presentation';
 import {
   DEFAULT_NDL_OCR_OPTIONS,
-  recognitionRetryThresholdForProfile,
   type NdlOcrOptions,
   type OcrProfile,
 } from "./lib/ocr/profiles";
@@ -55,6 +54,11 @@ import {
     type Locale,
   } from "./lib/i18n";
 
+  import BatchOcr from "./BatchOcr.svelte";
+  import { disposeOcrWorker } from "./lib/ocr/worker-client";
+  let batchRunning = $state(false);
+  let imagePreprocessing: "off" | "auto" = $state("auto");
+
   let manifest: ViewerManifest = $state(initialManifest);
   let locale: Locale = $state("ja");
   let pageIndex = $state(0);
@@ -63,6 +67,10 @@ import {
   let hasLoadedManifest = false;
   const selectedCanvasStorageKey = "bokkei-selected-canvas";
   const ocrTextSizeStorageKey = "bokkei-ocr-text-size";
+  const serviceNoticeStorageKey = "bokkei-service-notice-accepted";
+  let serviceNoticeVisible = $state(false);
+  let serviceNoticeStorageFailed = $state(false);
+  let serviceNoticeAgreeButton: HTMLButtonElement | null = $state(null);
   const MIN_OCR_TEXT_SIZE = 14;
   const MAX_OCR_TEXT_SIZE = 28;
   const OCR_TEXT_SIZE_STEP = 1;
@@ -90,12 +98,21 @@ import {
   let metomLoading = $state(false);
   let metomError = $state<unknown>(null);
   let fullOcrRunning = $state(false);
-  let fullOcrProgress = $state<NdlOcrProgress | null>(null);
+  let fullOcrProgress = $state<PageOcrProgress | null>(null);
   let fullOcrError = $state<unknown>(null);
   let ocrAbortController = $state<AbortController | null>(null);
   let ocrTextExpanded = $state(false);
   let ocrResultFontSize = $state(DEFAULT_OCR_TEXT_SIZE);
   let ocrProfile: OcrProfile = $state("balanced");
+  let ocrEngine: OcrEngineId = $state('ndl-parseq');
+  const honkokuAvailable = canRunHonkoku();
+  let modelDownloadBytes = $state<number | undefined>(undefined);
+  function changeOcrEngine(event: Event): void {
+    ocrEngine = normalizeOcrEngine((event.currentTarget as HTMLSelectElement).value, honkokuAvailable);
+    disposeOcrWorker();
+    modelDownloadBytes = undefined;
+    try { localStorage.setItem('bokkei-ocr-engine', ocrEngine); } catch { /* Optional preference. */ }
+  }
   let benchmarkGroundTruthText = $state("");
   let benchmarkGroundTruthError = $state("");
   let benchmarkMetrics = $state<OcrPageMetrics | null>(null);
@@ -106,11 +123,8 @@ import {
     pageIndex,
     canvasId: manifest.pages[pageIndex]?.canvasId,
   }));
-  let average = $derived(
-    page.result.length
-      ? Math.round(page.result.reduce((sum, line) => sum + (line.recognitionScore ?? line.detectionScore), 0) / page.result.length * 100)
-      : 0,
-  );
+  let generationResult = $derived(page.ocrIdentity?.engineId === 'honkoku-v19' || page.result.some(isAutoregressiveLine));
+  let average = $derived(generationResult ? generationAverageScore(page.result) : recognitionAveragePercent(page.result));
   let detectionAverage = $derived(
     page.result.length
       ? Math.round(page.result.reduce((sum, line) => sum + line.detectionScore, 0) / page.result.length * 100)
@@ -126,6 +140,7 @@ import {
   let metomCropUrl = $derived(crop && metomSupported ? buildIiifCropUrl(page, crop) : "");
   let manifestTitle = $derived(localizedText(manifest.titleTranslations, locale) || manifest.title);
   let manifestAttribution = $derived(localizedText(manifest.attributionTranslations, locale) || manifest.attribution);
+  let licenseRestricted = $derived(!manifest.licenseAllowsTranscription);
   let pageLabel = $derived(localizedText(page.labelTranslations, locale) || page.label);
   let selectedOcrText = $derived(page.result[selectedLine]?.text ?? "");
   let variantNeedle = $derived(query.trim() || (variantBrowseAll ? "" : selectedOcrText));
@@ -147,25 +162,27 @@ import {
   }
 
   function lineIsLowConfidence(line: typeof page.result[number]): boolean {
-    return line.recognitionScore === undefined
-      || line.recognitionScore < recognitionRetryThresholdForProfile(ocrProfile)
-      || line.minimumTokenScore !== undefined && line.minimumTokenScore < 0.28
-      || line.meanTokenMargin !== undefined && line.meanTokenMargin < 0.35
-      || line.endedWithEos === false
-      || line.uncertain === true;
+    return confidencePresentation(line, page.ocrProfile ?? ocrProfile).reviewNeeded;
+  }
+
+  function generationScoreText(score: number | undefined): string {
+    return score === undefined ? '—' : String(Math.round(score * 10) / 10);
   }
 
   function lineScoreSummary(line: typeof page.result[number]): string {
-    return t(locale, "lineScores", {
-      recognition: scorePercent(line.recognitionScore),
-      detection: scorePercent(line.detectionScore),
-    });
+    if (isAutoregressiveLine(line)) {
+      return t(locale, 'generationLineScores', {
+        generation: generationScoreText(generationScore(line)), detection: scorePercent(line.detectionScore),
+      });
+    }
+    return t(locale, 'lineScores', { recognition: scorePercent(line.recognitionScore), detection: scorePercent(line.detectionScore) });
   }
 
   function activeOcrOptions(): NdlOcrOptions {
     return {
       ...DEFAULT_NDL_OCR_OPTIONS,
       profile: ocrProfile,
+      preprocessing: imagePreprocessing,
       enableHighResolutionRetry: ocrProfile !== "fast",
       enableAdaptiveTiling: ocrProfile === "accurate",
       enableDeskewRetry: ocrProfile === "accurate",
@@ -210,6 +227,30 @@ import {
       // Use the default size when persisted preferences cannot be read.
     }
   }
+
+  function restoreServiceNotice(): void {
+    try {
+      serviceNoticeVisible = window.localStorage.getItem(serviceNoticeStorageKey) !== "true";
+    } catch {
+      // Storage can be unavailable in private or restricted browsing contexts.
+      serviceNoticeStorageFailed = true;
+      serviceNoticeVisible = true;
+    }
+  }
+
+  function acceptServiceNotice(): void {
+    try {
+      window.localStorage.setItem(serviceNoticeStorageKey, "true");
+    } catch {
+      // Continue for this session; the notice appears again next time.
+      serviceNoticeStorageFailed = true;
+    }
+    serviceNoticeVisible = false;
+  }
+
+  $effect(() => {
+    if (serviceNoticeVisible) serviceNoticeAgreeButton?.focus();
+  });
 
   function pageLabelFor(item: ViewerPage): string {
     return localizedText(item.labelTranslations, locale) || item.label;
@@ -503,6 +544,8 @@ import {
 
   onMount(() => {
     restoreOcrResultFontSize();
+    try { ocrEngine = normalizeOcrEngine(localStorage.getItem('bokkei-ocr-engine'), honkokuAvailable); } catch { /* Use NDL by default. */ }
+    restoreServiceNotice();
     try {
       const storedLocale = window.localStorage.getItem("bokkei-locale");
       if (isLocale(storedLocale)) locale = storedLocale;
@@ -601,6 +644,7 @@ import {
   }
 
   function openMetomPanel() {
+    if (licenseRestricted) return;
     panelTab = "metom";
     metomMode = true;
     overlay = false;
@@ -638,12 +682,13 @@ import {
   }
 
   async function runFullPageOcr() {
-    if (fullOcrRunning) return;
+    if (fullOcrRunning || batchRunning || page.ocrAvailability === "unsupported" || licenseRestricted) return;
 
-    const targetPage = page;
+    const targetPage = $state.snapshot(page);
     const targetManifestUrl = manifest.url;
     const targetCanvasId = targetPage.canvasId;
     const ocrOptions = activeOcrOptions();
+    const selectedEngine = ocrEngine;
     const startedAt = Date.now();
     const controller = new AbortController();
     let pendingOcr: PendingOcrMarker | null = null;
@@ -662,7 +707,7 @@ import {
     });
     viewerDebug.log("ocr-start", { canvasId: targetCanvasId });
     try {
-      const applyResult = (result: NdlOcrResult): boolean => {
+      const applyResult = (result: PageOcrResult): boolean => {
         if (controller.signal.aborted) {
           viewerDebug.log("ocr-cancelled", { canvasId: targetCanvasId, reason: "aborted" });
           return false;
@@ -697,9 +742,11 @@ import {
         return true;
       };
 
-      const result = await recognizePageWithNdlLite(
+      const pinnedRequest = await pinPageOcrRequest({ engineId: selectedEngine, options: ocrOptions }, controller.signal);
+      modelDownloadBytes = pinnedRequest.modelDownloadBytes;
+      const result = await executeOcrPage(
         targetPage,
-        ocrOptions,
+        pinnedRequest,
         (progress) => {
           if (ocrAbortController === controller) {
             fullOcrProgress = progress;
@@ -860,13 +907,16 @@ import {
       >
         <span>{line.text || t(locale, "unreadable")}</span>
         <small class:low={lowConfidence} title={scoreSummary} aria-label={scoreSummary}>
-          <span>{t(locale, "recognitionShort")} {scorePercent(line.recognitionScore)}</span>
+          {#if lowConfidence}<span>{locale === "ja" ? "要確認" : "Review needed"}</span>{/if}
+          <span>{isAutoregressiveLine(line) ? t(locale, 'generationShort') : t(locale, 'recognitionShort')} {isAutoregressiveLine(line) ? generationScoreText(generationScore(line)) : scorePercent(line.recognitionScore)}</span>
           <span>{t(locale, "detectionShort")} {scorePercent(line.detectionScore)}</span>
         </small>
       </button>
     {/each}
+  {:else if licenseRestricted}
+    <div class="ocr-empty license-restricted"><strong>{t(locale, "licenseRestricted")}</strong></div>
   {:else}
-    <div class="ocr-empty"><strong>{t(locale, "ocrNotRun")}</strong><span>{t(locale, "runOcrInstruction")}</span></div>
+    <div class="ocr-empty"><strong>{page.ocrEngine ? (locale === "ja" ? "文字行が検出されませんでした" : "No text lines detected") : t(locale, "ocrNotRun")}</strong>{#if !page.ocrEngine}<span>{t(locale, "runOcrInstruction")}</span>{/if}</div>
   {/if}
 {/snippet}
 
@@ -893,17 +943,19 @@ import {
     </div>
   </header>
 
-  <section class:show-narrow-ocr={narrowPane === "ocr"} class="workspace" id="viewer">
-    <aside class="page-rail" aria-label={t(locale, "pageList")}>
-      <div class="rail-count">{String(pageIndex + 1).padStart(2, "0")} / {String(manifest.pages.length).padStart(2, "0")}</div>
-      {#each manifest.pages as item, index (`${item.canvasId}-${index}`)}
-        <button type="button" data-page-index={index} class:active={pageIndex === index} class="thumb" style:--thumb-aspect-ratio={thumbnailAspectRatio(item)} onclick={() => selectPage(index)} aria-label={t(locale, "pageNumber", { number: index + 1, label: pageLabelFor(item) })}>
-          <img src={item.thumbnail} alt="" loading="lazy" decoding="async" />
-          <span>{index + 1}</span>
-        </button>
-      {/each}
-      <button type="button" class="rail-add" onclick={() => (pickerOpen = true)}><b>＋</b><span>Manifest</span></button>
-    </aside>
+  <section class:show-narrow-ocr={narrowPane === "ocr"} class:license-restricted={licenseRestricted} class="workspace" id="viewer">
+    {#if !licenseRestricted}
+      <aside class="page-rail" aria-label={t(locale, "pageList")}>
+        <div class="rail-count">{String(pageIndex + 1).padStart(2, "0")} / {String(manifest.pages.length).padStart(2, "0")}</div>
+        {#each manifest.pages as item, index (`${item.canvasId}-${index}`)}
+          <button type="button" data-page-index={index} class:active={pageIndex === index} class="thumb" style:--thumb-aspect-ratio={thumbnailAspectRatio(item)} onclick={() => selectPage(index)} aria-label={t(locale, "pageNumber", { number: index + 1, label: pageLabelFor(item) })}>
+            {#if item.thumbnail}<img src={item.thumbnail} alt="" loading="lazy" decoding="async" />{/if}
+            <span>{index + 1}</span>
+          </button>
+        {/each}
+        <button type="button" class="rail-add" onclick={() => (pickerOpen = true)}><b>＋</b><span>Manifest</span></button>
+      </aside>
+    {/if}
 
     <nav class="narrow-pane-switcher" aria-label={t(locale, "mobilePaneSelector")}>
       <button
@@ -926,52 +978,81 @@ import {
     </nav>
 
     <section class="image-stage" aria-label={t(locale, "viewer")}>
-      <div class="viewer-toolbar">
-        <div class="segmented" aria-label={t(locale, "displayMethod")}>
-          <button type="button" class:active={viewMode === "original"} onclick={() => (viewMode = "original")}>{t(locale, "originalImage")}</button>
-          <button type="button" class:active={viewMode === "contrast"} onclick={() => (viewMode = "contrast")}>{t(locale, "inkEnhanced")}</button>
+      {#if !licenseRestricted}
+        <div class="viewer-toolbar">
+          <div class="segmented" aria-label={t(locale, "displayMethod")}>
+            <button type="button" class:active={viewMode === "original"} onclick={() => (viewMode = "original")}>{t(locale, "originalImage")}</button>
+            <button type="button" class:active={viewMode === "contrast"} onclick={() => (viewMode = "contrast")}>{t(locale, "inkEnhanced")}</button>
+          </div>
+          <label class:disabled={!ocrRegions.length} class="overlay-toggle">
+            <input id="ocr-overlay" name="ocr-overlay" type="checkbox" bind:checked={overlay} disabled={!ocrRegions.length} />
+            <span></span>{ocrRegions.length ? t(locale, "ocrRegions", { count: ocrRegions.length }) : t(locale, "noOcrCoordinates")}
+          </label>
+          <button type="button" class:active={metomMode} class="crop-mode-button" onclick={openMetomPanel}>{t(locale, "selectCharacter")}</button>
+          <label class="ocr-profile-control" for="ocr-engine">
+            <span>{t(locale, 'ocrEngine')}</span>
+            <select id="ocr-engine" value={ocrEngine} onchange={changeOcrEngine} disabled={fullOcrRunning || batchRunning}
+              title={t(locale, ocrEngine === 'honkoku-v19' ? 'ocrEngineHonkokuDetail' : 'ocrEngineNdlDetail')}>
+              {#each OCR_ENGINES as engine}
+                <option value={engine.id} disabled={engine.id === 'honkoku-v19' && !honkokuAvailable}>{t(locale, engine.labelKey)}</option>
+              {/each}
+            </select>
+          </label>
+          {#if !honkokuAvailable}<small class="ocr-engine-unavailable">{t(locale, 'ocrEngineUnavailable')}</small>{/if}
+          <label class="ocr-profile-control" for="ocr-profile">
+            <span>{t(locale, "ocrProfile")}</span>
+            <select id="ocr-profile" bind:value={ocrProfile} disabled={fullOcrRunning || batchRunning}>
+              <option value="fast">{t(locale, "ocrProfileFast")}</option>
+              <option value="balanced">{t(locale, "ocrProfileBalanced")}</option>
+              <option value="accurate">{t(locale, "ocrProfileAccurate")}</option>
+            </select>
+          </label>
+          <label class="ocr-profile-control" for="ocr-preprocessing">
+            <span>{locale === "ja" ? "画像補正" : "Image correction"}</span>
+            <select id="ocr-preprocessing" bind:value={imagePreprocessing} disabled={fullOcrRunning || batchRunning}>
+              <option value="auto">{locale === "ja" ? "自動（検証済みのみ）" : "Auto (validated only)"}</option>
+              <option value="off">{locale === "ja" ? "なし" : "Off"}</option>
+            </select>
+          </label>
+          <section class:running={fullOcrRunning} class="toolbar-ocr-action" aria-label={t(locale, "autoOcr")}>
+            {#if fullOcrRunning}
+              <button
+                type="button"
+                class="toolbar-ocr-button cancel-ocr is-loading"
+                onclick={cancelFullOcr}
+                title={fullOcrProgress ? t(locale, fullOcrProgress.messageKey, fullOcrProgress.params) : t(locale, "cancel")}
+                aria-label={fullOcrProgress ? `${t(locale, "cancel")}: ${t(locale, fullOcrProgress.messageKey, fullOcrProgress.params)} ${fullOcrProgress.percent}%` : t(locale, "cancel")}
+              >
+                {#if fullOcrProgress}<span class="toolbar-ocr-fill" style={`width:${fullOcrProgress.percent}%`}></span>{/if}
+                <span class="toolbar-ocr-label"><span>{t(locale, "cancel")}</span>{#if fullOcrProgress}<b>{fullOcrProgress.percent}%</b>{/if}</span>
+              </button>
+            {:else}
+              <button type="button" class="toolbar-ocr-button run-full-ocr" disabled={batchRunning || page.ocrAvailability === "unsupported"} onclick={() => void runFullPageOcr()}>{page.ocrEngine ? t(locale, "rerunPage") : t(locale, "runPage")}</button>
+            {/if}
+          </section>
+          <div class="zoom-control">
+            <button type="button" onclick={() => adjustZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label={t(locale, "zoomOut")}>−</button>
+            <input id="viewer-zoom" name="zoom" aria-label={t(locale, "zoomLevel")} type="range" min={MIN_ZOOM} max={MAX_ZOOM} step="1" bind:value={zoom} />
+            <button type="button" onclick={() => adjustZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label={t(locale, "zoomIn")}>＋</button>
+            <output for="viewer-zoom">{zoom}%</output>
+          </div>
         </div>
-        <label class:disabled={!ocrRegions.length} class="overlay-toggle">
-          <input id="ocr-overlay" name="ocr-overlay" type="checkbox" bind:checked={overlay} disabled={!ocrRegions.length} />
-          <span></span>{ocrRegions.length ? t(locale, "ocrRegions", { count: ocrRegions.length }) : t(locale, "noOcrCoordinates")}
-        </label>
-        <button type="button" class:active={metomMode} class="crop-mode-button" onclick={openMetomPanel}>{t(locale, "selectCharacter")}</button>
-        <label class="ocr-profile-control" for="ocr-profile">
-          <span>{t(locale, "ocrProfile")}</span>
-          <select id="ocr-profile" bind:value={ocrProfile} disabled={fullOcrRunning}>
-            <option value="fast">{t(locale, "ocrProfileFast")}</option>
-            <option value="balanced">{t(locale, "ocrProfileBalanced")}</option>
-            <option value="accurate">{t(locale, "ocrProfileAccurate")}</option>
-          </select>
-        </label>
-        <section class:running={fullOcrRunning} class="toolbar-ocr-action" aria-label={t(locale, "autoOcr")}>
-          {#if fullOcrRunning}
-            <button
-              type="button"
-              class="toolbar-ocr-button cancel-ocr is-loading"
-              onclick={cancelFullOcr}
-              title={fullOcrProgress ? t(locale, fullOcrProgress.messageKey, fullOcrProgress.params) : t(locale, "cancel")}
-              aria-label={fullOcrProgress ? `${t(locale, "cancel")}: ${t(locale, fullOcrProgress.messageKey, fullOcrProgress.params)} ${fullOcrProgress.percent}%` : t(locale, "cancel")}
-            >
-              {#if fullOcrProgress}<span class="toolbar-ocr-fill" style={`width:${fullOcrProgress.percent}%`}></span>{/if}
-              <span class="toolbar-ocr-label"><span>{t(locale, "cancel")}</span>{#if fullOcrProgress}<b>{fullOcrProgress.percent}%</b>{/if}</span>
-            </button>
-          {:else}
-            <button type="button" class="toolbar-ocr-button run-full-ocr" onclick={() => void runFullPageOcr()}>{page.ocrEngine ? t(locale, "rerunPage") : t(locale, "runPage")}</button>
-          {/if}
-        </section>
-        <div class="zoom-control">
-          <button type="button" onclick={() => adjustZoom(-ZOOM_STEP)} disabled={zoom <= MIN_ZOOM} aria-label={t(locale, "zoomOut")}>−</button>
-          <input id="viewer-zoom" name="zoom" aria-label={t(locale, "zoomLevel")} type="range" min={MIN_ZOOM} max={MAX_ZOOM} step="1" bind:value={zoom} />
-          <button type="button" onclick={() => adjustZoom(ZOOM_STEP)} disabled={zoom >= MAX_ZOOM} aria-label={t(locale, "zoomIn")}>＋</button>
-          <output for="viewer-zoom">{zoom}%</output>
-        </div>
-      </div>
 
+        <BatchOcr {manifest} engineId={ocrEngine} options={activeOcrOptions()} currentCanvasId={page.canvasId} singleRunning={fullOcrRunning} {locale}
+          onBusy={(value) => { batchRunning = value; }}
+          onPageResult={(url, sourcePage, result) => {
+            if (url !== manifest.url || page.canvasId !== sourcePage.canvasId || page.imageServiceId !== sourcePage.imageServiceId
+              || (page.sourceImage || page.image) !== (sourcePage.sourceImage || sourcePage.image)) return;
+            applyOcrResult({ manifest, targetManifestUrl: url, targetCanvasId: sourcePage.canvasId, result });
+            overlay = result.lines.length > 0;
+          }} />
+      {/if}
       <div class="canvas-wrap">
         <div class:contrast={viewMode === "contrast"} class="manuscript" style:width={`${zoom}%`}>
           {#key page.image}
-            <img src={page.image} alt={t(locale, "imageAlt", { title: manifestTitle, label: pageLabel })} />
+            {#if page.image}<img src={page.image} alt={t(locale, "imageAlt", { title: manifestTitle, label: pageLabel })} />
+            {:else if licenseRestricted}<p class="ocr-empty license-restricted">{t(locale, "licenseRestricted")}</p>
+            {:else}<p class="ocr-empty">{locale === "ja" ? "このコマの画像構成はOCRに未対応です。元の番号を保持しています。" : "This canvas is unsupported for OCR. Its original number is preserved."}</p>{/if}
           {/key}
           {#if overlay && ocrRegions.length}
             <div class="ocr-boxes" aria-label={t(locale, "detectedRegions")}>
@@ -1013,18 +1094,26 @@ import {
         </div>
       </div>
 
-      <div class="page-controls">
-        <button type="button" onclick={() => movePage(-1)} disabled={pageIndex === 0}>{t(locale, "previous")}</button>
-        <span><strong>{pageIndex + 1}</strong> / {manifest.pages.length}</span>
-        <button type="button" onclick={() => movePage(1)} disabled={pageIndex === manifest.pages.length - 1}>{t(locale, "next")}</button>
-      </div>
+      {#if !licenseRestricted}
+        <div class="page-controls">
+          <button type="button" onclick={() => movePage(-1)} disabled={pageIndex === 0}>{t(locale, "previous")}</button>
+          <span><strong>{pageIndex + 1}</strong> / {manifest.pages.length}</span>
+          <button type="button" onclick={() => movePage(1)} disabled={pageIndex === manifest.pages.length - 1}>{t(locale, "next")}</button>
+        </div>
+      {/if}
     </section>
 
     <aside class="text-panel">
       <div class="panel-head">
         <div><span class="eyebrow">{t(locale, "recognitionResult")}</span><h1>{t(locale, "ocrHeading")}</h1></div>
         <div class="score-summary">
-          <div class="confidence-ring" title={t(locale, "recognitionScore")} style={`--score: ${average * 3.6}deg`}><strong>{average}</strong><small>%</small></div>
+          <div class="confidence-ring"
+            title={generationResult ? t(locale, 'generationScoreHelp') : t(locale, 'recognitionScore')}
+            aria-label={generationResult ? `${t(locale, 'generationScore')}: ${generationScoreText(average)} / 100` : `${t(locale, 'recognitionScore')}: ${average ?? '—'}%`}
+            style={`--score: ${(average ?? 0) * 3.6}deg`}>
+            <strong>{generationResult ? generationScoreText(average) : average ?? '—'}</strong>
+            <small>{generationResult ? t(locale, 'generationShort') : average === undefined ? t(locale, 'ocrConfidenceUnavailable') : '%'}</small>
+          </div>
           <small>{t(locale, "detectionScore")} {detectionAverage}%</small>
         </div>
       </div>
@@ -1036,7 +1125,7 @@ import {
       <div class="panel-tabs three" role="tablist">
         <button type="button" class:active={panelTab === "text"} onclick={() => { panelTab = "text"; metomMode = false; }} role="tab" aria-selected={panelTab === "text"}>{t(locale, "transcription")}</button>
         <button type="button" class:active={panelTab === "variants"} onclick={() => { panelTab = "variants"; metomMode = false; }} role="tab" aria-selected={panelTab === "variants"}>{t(locale, "variants")} <span>{itaijiSource.pairCount}</span></button>
-        <button type="button" class:active={panelTab === "metom"} onclick={openMetomPanel} role="tab" aria-selected={panelTab === "metom"}>{t(locale, "singleCharacterOcr")}</button>
+        {#if !licenseRestricted}<button type="button" class:active={panelTab === "metom"} onclick={openMetomPanel} role="tab" aria-selected={panelTab === "metom"}>{t(locale, "singleCharacterOcr")}</button>{/if}
       </div>
 
       {#if panelTab === "text"}
@@ -1057,7 +1146,7 @@ import {
             {/if}
             {#if !ocrTextExpanded}{@render ocrResultList()}{/if}
           </div>
-          <p class="demo-note">{page.ocrEngine ? t(locale, "ocrConfidenceNote", { engine: page.ocrEngine, provider: page.ocrProvider ?? "" }) : t(locale, "ocrDeviceDescription")}</p>
+          <p class="demo-note">{page.ocrEngine ? t(locale, generationResult ? "ocrGenerationConfidenceNote" : "ocrConfidenceNote", { engine: page.ocrEngine, provider: page.ocrProvider ?? "" }) : t(locale, "ocrDeviceDescription")}</p>
           {#if page.result.length && viewerDebug.enabled}
             <div class="benchmark-export" aria-label={t(locale, "benchmarkExport")}>
               <span>{t(locale, "benchmarkExport")}</span>
@@ -1074,6 +1163,9 @@ import {
               <div class="benchmark-metrics" aria-label={t(locale, "benchmarkMetrics")}>
                 <span>{t(locale, "benchmarkMetrics")}</span>
                 <b>{t(locale, "benchmarkCer")} {metricPercent(benchmarkMetrics.raw.cer)}</b>
+                <b>{locale === "ja" ? "ページ全文CER" : "Full-page CER"} {metricPercent(benchmarkMetrics.pageCer)}</b>
+                <b>{locale === "ja" ? "文字挿入率" : "Insertion rate"} {metricPercent(benchmarkMetrics.insertionRate)}</b>
+                <b>{locale === "ja" ? "文字脱落率" : "Deletion rate"} {metricPercent(benchmarkMetrics.deletionRate)}</b>
                 {#if benchmarkMetrics.normalized}<b>{t(locale, "benchmarkNormalizedCer")} {metricPercent(benchmarkMetrics.normalized.cer)}</b>{/if}
                 <b>{t(locale, "benchmarkExact")} {metricPercent(benchmarkMetrics.raw.exactLineRate)}</b>
                 <b>{t(locale, "benchmarkRecall")} {metricPercent(benchmarkMetrics.detection.recall)}</b>
@@ -1153,10 +1245,16 @@ import {
       <div class="analysis-card">
         <div class="analysis-title"><span>{t(locale, "recognitionConditions")}</span><strong>{countLabel(locale, page.result.length, "line")}</strong></div>
         <dl>
-          <div><dt>{t(locale, "ocrModel")}</dt><dd>NDL古典籍OCR-Lite</dd></div>
+          <div><dt>{t(locale, "ocrModel")}</dt><dd>{page.ocrEngine ?? t(locale, ocrEngine === 'honkoku-v19' ? 'ocrEngineHonkoku' : 'ocrEngineNdl')}</dd></div>
           <div><dt>{t(locale, "iiifInput")}</dt><dd>Canvas / Image Service</dd></div>
           <div><dt>{t(locale, "ocrOutput")}</dt><dd>{t(locale, "coordinateText")}</dd></div>
         </dl>
+        <div class="ocr-model-summary">
+          <p class="ocr-model-detail">{t(locale, ocrEngine === 'honkoku-v19' ? 'ocrEngineHonkokuDetail' : 'ocrEngineNdlDetail')}</p>
+          {#if ocrEngine === 'honkoku-v19' && modelDownloadBytes}
+            <p class="ocr-model-download">{locale === 'ja' ? 'モデル一覧の合計（全実行方式）' : 'Manifest total (all providers)'}: {Math.ceil(modelDownloadBytes / 1048576)} MiB</p>
+          {/if}
+        </div>
       </div>
 
       <aside class="ndl-usage-notice" aria-label={t(locale, "ndlUsage")}>
@@ -1168,6 +1266,7 @@ import {
           <a href="https://github.com/ndl-lab/ndlkotenocr-lite/blob/master/LICENCE" target="_blank" rel="noreferrer">{t(locale, "terms")}</a>
           <br />{t(locale, "variantSoftware")} · <a href={itaijiSource.repository} target="_blank" rel="noreferrer">{t(locale, "github")}</a>
         </p>
+        <p class="ocr-model-license"><a href="https://huggingface.co/yuta1984/honkoku-ocr" target="_blank" rel="noreferrer">みんなで翻刻OCR v19</a> · <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noreferrer">CC BY-SA 4.0</a></p>
       </aside>
 
       <footer class="source-note">
@@ -1176,6 +1275,25 @@ import {
       </footer>
     </aside>
   </section>
+
+  {#if serviceNoticeVisible}
+    <div class="service-notice-backdrop">
+      <div class="service-notice-dialog" role="dialog" aria-modal="true" aria-labelledby="service-notice-title">
+        <header class="service-notice-head">
+          <span class="eyebrow">BOKKEI / KOTEN OCR SERVICE</span>
+          <h2 id="service-notice-title">{t(locale, "serviceNoticeTitle")}</h2>
+        </header>
+        <div class="service-notice-body">
+          <p lang="ja">{t(locale, "serviceNoticeBodyJa")}</p>
+          <p lang="en">{t(locale, "serviceNoticeBodyEn")}</p>
+          {#if serviceNoticeStorageFailed}<p class="service-notice-warning">{t(locale, "serviceNoticeStorageWarning")}</p>{/if}
+        </div>
+        <footer class="service-notice-foot">
+          <button type="button" class="service-notice-agree" bind:this={serviceNoticeAgreeButton} onclick={acceptServiceNotice}>{t(locale, "serviceNoticeAgree")}</button>
+        </footer>
+      </div>
+    </div>
+  {/if}
 
   {#if ocrTextExpanded}
     <div

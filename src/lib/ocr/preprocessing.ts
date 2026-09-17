@@ -1,6 +1,7 @@
+import { createOcrCanvas, releaseOcrCanvas, type OcrCanvas } from "./canvas.ts";
 import type { RecognitionOrientation, RecognitionPreprocessing } from "./types.ts";
 
-type RgbaImage = {
+export type RgbaImage = {
   width: number;
   height: number;
   data: Uint8ClampedArray;
@@ -16,31 +17,37 @@ function luminance(red: number, green: number, blue: number): number {
 
 function percentile(values: number[], fraction: number): number {
   if (!values.length) return 0;
-  const sorted = values.slice().sort((first, second) => first - second);
-  return sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * fraction)))] ?? 0;
+  const histogram = new Uint32Array(256);
+  for (const value of values) histogram[Math.round(clamp(value))]++;
+  const target = Math.floor((values.length - 1) * fraction);
+  let count = 0;
+  for (let value = 0; value < 256; value++) {
+    count += histogram[value];
+    if (count > target) return value;
+  }
+  return 255;
 }
 
-function imageData(source: HTMLCanvasElement): RgbaImage {
+function imageData(source: OcrCanvas): RgbaImage {
   const context = source.getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("Preprocessing requires a 2D canvas.");
   const image = context.getImageData(0, 0, source.width, source.height);
   return { width: source.width, height: source.height, data: image.data };
 }
 
-function canvasFromImage(image: RgbaImage): HTMLCanvasElement {
-  const canvas = document.createElement("canvas");
+function canvasFromImage(image: RgbaImage): OcrCanvas {
+  const canvas = createOcrCanvas();
   canvas.width = image.width;
   canvas.height = image.height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) {
-    canvas.width = 0;
-    canvas.height = 0;
-    throw new Error("Preprocessing could not create a 2D canvas.");
-  }
-  const output = context.createImageData(image.width, image.height);
-  output.data.set(image.data);
-  context.putImageData(output, 0, 0);
-  return canvas;
+  try {
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("Preprocessing could not create a 2D canvas.");
+    const output = context.createImageData(image.width, image.height);
+    output.data.set(image.data);
+    context.putImageData(output, 0, 0);
+    return canvas;
+  } catch (error) { releaseOcrCanvas(canvas); throw error; }
+
 }
 
 function grayscaleContrastImage(source: RgbaImage): RgbaImage {
@@ -52,7 +59,8 @@ function grayscaleContrastImage(source: RgbaImage): RgbaImage {
   const high = Math.max(low + 1, percentile(values, 0.98));
   const data = new Uint8ClampedArray(source.data.length);
   for (let index = 0; index < values.length; index += 1) {
-    const value = clamp(((values[index] - low) * 255) / (high - low));
+    const stretched = clamp(((values[index] - low) * 255) / (high - low));
+    const value = values[index] * 0.5 + stretched * 0.5;
     const offset = index * 4;
     data[offset] = value;
     data[offset + 1] = value;
@@ -62,14 +70,15 @@ function grayscaleContrastImage(source: RgbaImage): RgbaImage {
   return { ...source, data };
 }
 
-function integralImage(source: RgbaImage): Float64Array {
+function integralImage(source: RgbaImage, squared = false): Float64Array {
   const stride = source.width + 1;
   const integral = new Float64Array((source.width + 1) * (source.height + 1));
   for (let y = 1; y <= source.height; y += 1) {
     let rowSum = 0;
     for (let x = 1; x <= source.width; x += 1) {
       const pixel = ((y - 1) * source.width + (x - 1)) * 4;
-      rowSum += luminance(source.data[pixel], source.data[pixel + 1], source.data[pixel + 2]);
+      const value = luminance(source.data[pixel], source.data[pixel + 1], source.data[pixel + 2]);
+      rowSum += squared ? value * value : value;
       integral[y * stride + x] = integral[(y - 1) * stride + x] + rowSum;
     }
   }
@@ -91,14 +100,14 @@ function boxAverage(integral: Float64Array, width: number, height: number, x: nu
 
 function backgroundNormalizedImage(source: RgbaImage): RgbaImage {
   const integral = integralImage(source);
-  const radius = Math.max(2, Math.round(Math.min(source.width, source.height) * 0.06));
+  const radius = Math.max(8, Math.round(Math.min(source.width, source.height) * 0.75));
   const data = new Uint8ClampedArray(source.data.length);
   for (let y = 0; y < source.height; y += 1) {
     for (let x = 0; x < source.width; x += 1) {
       const offset = (y * source.width + x) * 4;
       const value = luminance(source.data[offset], source.data[offset + 1], source.data[offset + 2]);
       const background = boxAverage(integral, source.width, source.height, x, y, radius);
-      const normalized = clamp(128 + (value - background) * 2.4);
+      const normalized = clamp((value * 255) / Math.max(32, background));
       data[offset] = normalized;
       data[offset + 1] = normalized;
       data[offset + 2] = normalized;
@@ -153,10 +162,51 @@ function adaptiveBinaryImage(source: RgbaImage): RgbaImage {
   return { ...source, data };
 }
 
+export function sauvolaImage(source: RgbaImage, radius = 12, k = 0.2): RgbaImage {
+  const sums = integralImage(source), squares = integralImage(source, true);
+  const data = new Uint8ClampedArray(source.data.length);
+  for (let y = 0; y < source.height; y++) {
+    for (let x = 0; x < source.width; x++) {
+      const offset = (y * source.width + x) * 4;
+      const mean = boxAverage(sums, source.width, source.height, x, y, radius);
+      const variance = Math.max(0, boxAverage(squares, source.width, source.height, x, y, radius) - mean * mean);
+      const threshold = mean * (1 + k * (Math.sqrt(variance) / 128 - 1));
+      const pixel = luminance(source.data[offset], source.data[offset + 1], source.data[offset + 2]);
+      const value = pixel < threshold ? 0 : 255;
+      data[offset] = data[offset + 1] = data[offset + 2] = value;
+      data[offset + 3] = source.data[offset + 3];
+    }
+  }
+  return { ...source, data };
+}
+
+export type ImageQuality = { contrast: number; backgroundVariation: number };
+export function measureImageQuality(source: OcrCanvas): ImageQuality {
+  const sample = createOcrCanvas();
+  sample.width = Math.min(64, source.width); sample.height = Math.min(128, source.height);
+  try {
+    const context = sample.getContext("2d", { willReadFrequently: true });
+    if (!context) return { contrast: 0, backgroundVariation: 0 };
+    context.drawImage(source, 0, 0, sample.width, sample.height);
+    const pixels = context.getImageData(0, 0, sample.width, sample.height).data;
+    const values: number[] = [], backgrounds: number[] = [];
+    for (let y = 0; y < sample.height; y++) {
+      const row: number[] = [];
+      for (let x = 0; x < sample.width; x++) {
+        const i = (y * sample.width + x) * 4;
+        const value = luminance(pixels[i], pixels[i + 1], pixels[i + 2]);
+        values.push(value); row.push(value);
+      }
+      backgrounds.push(percentile(row, 0.9));
+    }
+    return { contrast: percentile(values, 0.95) - percentile(values, 0.05), backgroundVariation: percentile(backgrounds, 0.9) - percentile(backgrounds, 0.1) };
+  } finally { releaseOcrCanvas(sample); }
+}
+
 export function preprocessCanvas(
-  source: HTMLCanvasElement,
+  source: OcrCanvas,
   preprocessing: Exclude<RecognitionPreprocessing, "original" | "padded" | "high-resolution-original" | "high-resolution-padded">,
-): HTMLCanvasElement {
+): OcrCanvas {
   const image = imageData(source);
   const processed = preprocessing === "grayscale-contrast"
     ? grayscaleContrastImage(image)
@@ -164,24 +214,23 @@ export function preprocessCanvas(
       ? backgroundNormalizedImage(image)
       : preprocessing === "ink-channel"
         ? bestInkChannelImage(image)
-        : adaptiveBinaryImage(image);
+        : preprocessing === "sauvola" ? sauvolaImage(image) : adaptiveBinaryImage(image);
   return canvasFromImage(processed);
 }
 
-export function releasePreprocessedCanvas(canvas: HTMLCanvasElement | null): void {
+export function releasePreprocessedCanvas(canvas: OcrCanvas | null): void {
   if (!canvas) return;
-  canvas.width = 0;
-  canvas.height = 0;
+  releaseOcrCanvas(canvas);
 }
 
 export function transformLineCanvas(
-  source: HTMLCanvasElement,
+  source: OcrCanvas,
   orientation: RecognitionOrientation = "auto",
   deskewAngle = 0,
-): HTMLCanvasElement {
+): OcrCanvas {
   const rotateQuarterTurn = orientation === "rotate-90"
     || (orientation === "auto" && source.height > source.width);
-  const oriented = document.createElement("canvas");
+  const oriented = createOcrCanvas();
   oriented.width = Math.max(1, rotateQuarterTurn ? source.height : source.width);
   oriented.height = Math.max(1, rotateQuarterTurn ? source.width : source.height);
 
@@ -206,7 +255,7 @@ export function transformLineCanvas(
       1,
       Math.ceil(Math.abs(oriented.width * Math.sin(radians)) + Math.abs(oriented.height * Math.cos(radians))),
     );
-    const rotated = document.createElement("canvas");
+    const rotated = createOcrCanvas();
     rotated.width = width;
     rotated.height = height;
     try {
@@ -219,22 +268,19 @@ export function transformLineCanvas(
       rotatedContext.translate(width / 2, height / 2);
       rotatedContext.rotate(radians);
       rotatedContext.drawImage(oriented, -oriented.width / 2, -oriented.height / 2);
-      oriented.width = 0;
-      oriented.height = 0;
+      releaseOcrCanvas(oriented);
       return rotated;
     } catch (error) {
-      rotated.width = 0;
-      rotated.height = 0;
+      releaseOcrCanvas(rotated);
       throw error;
     }
   } catch (error) {
-    oriented.width = 0;
-    oriented.height = 0;
+    releaseOcrCanvas(oriented);
     throw error;
   }
 }
 
-function projectionScore(source: HTMLCanvasElement): number {
+function projectionScore(source: OcrCanvas): number {
   const context = source.getContext("2d", { willReadFrequently: true });
   if (!context || source.width <= 0 || source.height <= 0) return 0;
   const pixels = context.getImageData(0, 0, source.width, source.height).data;
@@ -252,14 +298,14 @@ function projectionScore(source: HTMLCanvasElement): number {
 }
 
 export function rankDeskewAngles(
-  source: HTMLCanvasElement,
+  source: OcrCanvas,
   orientation: RecognitionOrientation = "auto",
   angles = [-3, -1.5, 0, 1.5, 3],
 ): number[] {
   return angles
     .filter((angle) => Number.isFinite(angle))
     .map((angle, order) => {
-      let transformed: HTMLCanvasElement | null = null;
+      let transformed: OcrCanvas | null = null;
       try {
         transformed = transformLineCanvas(source, orientation, angle);
         return { angle, score: projectionScore(transformed), order };

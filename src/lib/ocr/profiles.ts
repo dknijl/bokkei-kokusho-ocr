@@ -1,12 +1,23 @@
 import type { DecodedRecognition } from "./recognition-score.ts";
 import type { OcrRegion } from "./types.ts";
+import { ndlModelRevision } from "./model-revision.ts";
 
 export type OcrProfile = "fast" | "balanced" | "accurate";
 export type OcrWritingMode = "auto" | "vertical" | "horizontal";
 export const MAX_EXTRA_RECOGNITIONS = 8;
 
 export type NdlOcrOptions = {
+  modelRevision?: string;
   profile: OcrProfile;
+  preprocessing: "off" | "auto";
+  preprocessingPolicyVersion: string;
+  /** Explicit benchmark only; never set by ordinary OCR controls. */
+  benchmarkPreprocessing?: "grayscale-contrast" | "background-normalized" | "sauvola" | "adaptive-binary";
+  overviewMaxSize: number;
+  tileMaxSize: number;
+  scrollAspectRatio: number;
+  scrollTileSpan: number;
+  tileOverlap: number;
   paperFilter: "off" | "soft";
   enableHighResolutionRetry: boolean;
   enableAdaptiveTiling: boolean;
@@ -19,6 +30,13 @@ export type NdlOcrOptions = {
 
 export const DEFAULT_NDL_OCR_OPTIONS: NdlOcrOptions = {
   profile: "balanced",
+  preprocessing: "auto",
+  preprocessingPolicyVersion: "validated-only-v1",
+  overviewMaxSize: 2000,
+  tileMaxSize: 2048,
+  scrollAspectRatio: 3,
+  scrollTileSpan: 1.5,
+  tileOverlap: 0.15,
   paperFilter: "off",
   enableHighResolutionRetry: true,
   enableAdaptiveTiling: false,
@@ -44,7 +62,15 @@ export function normalizeNdlOcrOptions(options?: Partial<NdlOcrOptions>): NdlOcr
   };
   return {
     ...next,
+    modelRevision: ndlModelRevision(next.modelRevision),
     profile,
+    preprocessing: next.preprocessing === "off" ? "off" : "auto",
+    preprocessingPolicyVersion: DEFAULT_NDL_OCR_OPTIONS.preprocessingPolicyVersion,
+    overviewMaxSize: Math.min(2048, Math.max(256, Number(next.overviewMaxSize) || 2000)),
+    tileMaxSize: Math.min(2048, Math.max(256, Number(next.tileMaxSize) || 2048)),
+    scrollAspectRatio: Math.max(3, Number(next.scrollAspectRatio) || 3),
+    scrollTileSpan: Math.max(1, Math.min(2, Number(next.scrollTileSpan) || 1.5)),
+    tileOverlap: Math.max(0.1, Math.min(0.4, Number(next.tileOverlap) || 0.15)),
     writingMode,
     scattered: Boolean(next.scattered),
     enableHighResolutionRetry: options?.enableHighResolutionRetry ?? profileDefaults.enableHighResolutionRetry,

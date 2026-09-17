@@ -1,3 +1,7 @@
+export type OcrEngineId = 'ndl-parseq' | 'honkoku-v19';
+export type OcrConfidenceKind = 'parseq-token' | 'autoregressive-token' | 'unavailable';
+export type OcrStopReason = 'eos' | 'max-length' | 'degenerate-repeat' | 'invalid-token' | 'incomplete';
+
 export type OcrRegion = {
   x: number;
   y: number;
@@ -13,7 +17,8 @@ export type RecognitionPreprocessing =
   | "grayscale-contrast"
   | "background-normalized"
   | "ink-channel"
-  | "adaptive-binary";
+  | "adaptive-binary"
+  | "sauvola";
 
 export type RecognitionOrientation = "auto" | "normal" | "rotate-90";
 
@@ -28,12 +33,36 @@ export type OcrAlternative = {
   preprocessing: RecognitionPreprocessing;
   orientation?: RecognitionOrientation;
   deskewAngle?: number;
+  input?: {
+    imageUrl: string;
+    sourceRegion: OcrRegion;
+    width: number;
+    height: number;
+    parameters?: Record<string, number | string>;
+  };
 };
 
-export type OcrSelectionReason = "consensus" | "score" | "original-tie";
+export type OcrSelectionReason = "consensus" | "score" | "original-tie" | "evaluation-only";
 
-export type OcrLine = {
+export type OcrGenerationDiagnostics = {
+  generatedTokens?: number;
+  stopReason?: OcrStopReason;
+  meanLogProbability?: number;
+  minimumTokenProbability?: number;
+};
+
+export type OcrLine = OcrGenerationDiagnostics & {
   text: string;
+  rawKoji?: string;
+  outputFormat?: 'plain' | 'koji';
+  recognizerId?: OcrEngineId;
+  recognizerRevision?: string;
+  confidenceKind?: OcrConfidenceKind;
+  confidenceCalibrated?: boolean;
+  generatedTokens?: number;
+  stopReason?: OcrStopReason;
+  meanLogProbability?: number;
+  minimumTokenProbability?: number;
   region?: OcrRegion;
   id?: string;
   detectionIndex?: number;
@@ -52,6 +81,7 @@ export type OcrLine = {
   alternatives?: OcrAlternative[];
   uncertain?: boolean;
   selectionReason?: OcrSelectionReason;
+  input?: OcrAlternative["input"];
 };
 
 export type CropPadding = {
@@ -71,4 +101,9 @@ export type OcrRunStats = {
   additionalCropFailures: number;
   maxCanvasPixels: number;
   durationMs: number;
+  imageRequests?: number;
+  sourceTiles?: number;
+  warnings?: string[];
+  maxLiveCanvases?: number;
+  liveCanvasesAfterPage?: number;
 };

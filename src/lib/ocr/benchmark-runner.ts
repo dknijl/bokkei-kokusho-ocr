@@ -1,5 +1,6 @@
 import type { ViewerPage } from "../iiif.ts";
-import type { NdlOcrProgress, NdlOcrResult } from "../ndl-ocr.ts";
+import type { NdlOcrResult } from '../ndl-ocr.ts';
+import type { PageOcrProgress, PageOcrResult } from './engine/types.ts';
 import {
   compareOcrBenchmarkRecords,
   createOcrBenchmarkBaseline,
@@ -14,7 +15,7 @@ import type { NdlOcrOptions } from "./profiles.ts";
 export type OcrBenchmarkProgress = {
   pageIndex: number;
   totalPages: number;
-  progress: NdlOcrProgress;
+  progress: PageOcrProgress;
 };
 
 export type OcrBenchmarkRunnerOptions = {
@@ -23,9 +24,9 @@ export type OcrBenchmarkRunnerOptions = {
   recognize: (
     page: ViewerPage,
     options: NdlOcrOptions,
-    onProgress: (progress: NdlOcrProgress) => void,
+    onProgress: (progress: PageOcrProgress) => void,
     signal?: AbortSignal,
-  ) => Promise<NdlOcrResult>;
+  ) => Promise<NdlOcrResult | PageOcrResult>;
   signal?: AbortSignal;
   onProgress?: (progress: OcrBenchmarkProgress) => void;
   onRecord?: (record: OcrBenchmarkRecord, pageIndex: number) => void;
@@ -42,14 +43,17 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 export function viewerPageFromGroundTruth(page: OcrGroundTruthPage): ViewerPage {
   const image = page.imageServiceId
-    ? `${page.imageServiceId.replace(/\/$/, "")}/full/2000,/0/default.jpg`
-    : "";
+    ? `${page.imageServiceId.replace(/\/$/, "")}/full/full/0/default.jpg`
+    : page.imageUrl ?? "";
   return {
     canvasId: page.canvasId,
     imageServiceId: page.imageServiceId,
     label: page.id,
     labelTranslations: { none: page.id },
     image,
+    sourceImage: image,
+    sourceWidth: page.width,
+    sourceHeight: page.height,
     thumbnail: image,
     width: page.width,
     height: page.height,
@@ -75,7 +79,10 @@ export async function runOcrBenchmarkDataset(
     throwIfAborted(options.signal);
     const resultPage: ViewerPage = {
       ...page,
+      width: result.imageWidth,
+      height: result.imageHeight,
       result: result.lines,
+      ...('identity' in result ? { ocrIdentity: { ...result.identity } } : {}),
       ocrProvider: result.provider,
       ocrModelRevision: result.revision,
       ocrPipelineVersion: result.pipelineVersion,

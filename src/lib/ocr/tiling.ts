@@ -1,3 +1,4 @@
+import { createOcrCanvas, releaseOcrCanvas, type OcrCanvas } from "./canvas.ts";
 import type { OcrProfile } from "./profiles.ts";
 import type { OcrRegion } from "./types.ts";
 
@@ -99,14 +100,14 @@ function median(values: number[]): number {
 }
 
 export function estimateUncoveredInkRegions(
-  source: HTMLCanvasElement,
+  source: OcrCanvas,
   detections: OcrRegion[],
   maxRegions = 12,
 ): OcrRegion[] {
   const scale = Math.min(1, 256 / Math.max(source.width, source.height));
   const width = Math.max(1, Math.round(source.width * scale));
   const height = Math.max(1, Math.round(source.height * scale));
-  const canvas = document.createElement("canvas");
+  const canvas = createOcrCanvas();
   canvas.width = width;
   canvas.height = height;
   try {
@@ -181,7 +182,6 @@ export function estimateUncoveredInkRegions(
       .slice(0, maxRegions)
       .map((item) => item.region);
   } finally {
-    canvas.width = 0;
-    canvas.height = 0;
+    releaseOcrCanvas(canvas);
   }
 }
