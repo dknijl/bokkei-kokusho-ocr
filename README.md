@@ -6,6 +6,10 @@ NDL及びみんなで翻刻のAI OCRモデルを利用しております。
 
 <img width="560" alt="bokkei image" src="https://github.com/user-attachments/assets/8af73d65-e74f-46d7-9690-2dd7d01c01cb" />
 
+### デモURL
+
+https://bokkei-kokusho-ocr.vercel.app/ocr/
+
 ## 使い方
 
 1. 「資料」から書誌IDまたはIIIF Manifestを指定します。
