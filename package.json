@@ -35,6 +35,6 @@
   "type": "module",
   "dependencies": {
     "onnxruntime-web": "^1.29.0",
-    "@zip.js/zip.js": "^2.14.0"
+    "@zip.js/zip.js": "^2.15.0"
   }
 }
