@@ -23,7 +23,7 @@
     "test:honkoku-line-smoke": "node scripts/test-honkoku-smoke.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.64.0",
+    "@playwright/test": "^1.64.1",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@types/node": "26.6.5",
     "@typescript/native": "npm:typescript@^7.0.2",
